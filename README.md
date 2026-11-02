@@ -2,7 +2,7 @@
 
 Capture and restore macOS fullscreen window arrangements through yabai.
 
-**Status: design and working prototypes. The packaged CLI is not implemented yet.**
+**Status: Poetry package, Click command scaffold, and working prototypes. CLI capture/list/restore behavior is not implemented yet.**
 
 The first version will save named snapshots of the running macOS session and restore fullscreen states and original monitors. YAML presets, flexible app/title matching, preserve filters, reopening missing windows, and scripting-addition-assisted Space ordering are planned for later versions.
 
@@ -12,6 +12,24 @@ The first version will save named snapshots of the running macOS session and res
 - [Prototype scripts and limitations](prototypes/README.md)
 - [Future scripting addition and Space ordering](docs/draft/HANDOFF.yabai-sa-and-space-reordering.md)
 - Local implementation takeover instructions: `private/HANDOFF.md` (intentionally ignored)
+
+## Development setup
+
+Requires Python 3.12+ and Poetry 2.x:
+
+```sh
+poetry install
+poetry run spacekeeper --help
+poetry run spacekeeper capture --help
+poetry run spacekeeper restore --help
+```
+
+Poetry creates a local `.venv`. The Click scaffold provides `capture [NAME]
+[--force]`, `list`, `restore [NAME]`, and `--version`. Capture/list/restore currently
+exit with an explicit not-implemented error and do not query or change the desktop.
+You can also run `poetry run python -m spacekeeper --help`.
+
+Build the wheel and source distribution with `poetry build`.
 
 ## Try the prototypes
 

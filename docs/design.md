@@ -89,4 +89,4 @@ windows:
 - Tests use synthetic snapshots and an injected command runner. Include CLI/storage checks and executor sequencing; distinguish mocked results from live evidence.
 - Public Git history contains no real snapshots, personal presets, machine UUIDs, window titles, or local absolute paths. Provide concise install/use/limitation documentation.
 
-Still open for the implementation session: packaging/installation mechanism, machine-readable output interface, precise exit-code contract, and newer Python minimum supported version. Later-feature schemas and matching policy are intentionally deferred.
+The initial package uses Poetry, Python 3.12+, and Click for the command structure, with a `spacekeeper` console entry point. Capture/list/restore are currently placeholders. Still open for implementation: machine-readable output interface and the precise exit-code contract for completed operations. Later-feature schemas and matching policy are intentionally deferred.
