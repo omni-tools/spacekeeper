@@ -1,0 +1,22 @@
+# Local snapshots, presets, handoff, and reports
+/private/
+/snapshots/
+/presets/
+/backups/
+**/yabai-before-*.json
+**/yabai-restore-result-*.json
+**/yabai-fullscreen-restore-result-*.json
+
+# Python and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.DS_Store
+.env
+.env.*
