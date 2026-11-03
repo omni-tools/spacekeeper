@@ -9,7 +9,6 @@ import click
 from spacekeeper.config import ConfigError, Settings
 from spacekeeper.identity import IdentityUnavailable
 from spacekeeper.matching import WindowRule
-from spacekeeper.presets import Preset, PresetError, PresetStore
 from spacekeeper.restore import RestoreCoordinator, RestoreError
 from spacekeeper.storage import SnapshotStore, StorageError, validate_name
 from spacekeeper.yabai import Yabai, YabaiError
@@ -33,7 +32,7 @@ DIRECTORY = click.Path(file_okay=False, path_type=Path)
 def operational_errors():
     try:
         yield
-    except (StorageError, YabaiError, IdentityUnavailable, RestoreError, ConfigError, PresetError) as error:
+    except (StorageError, YabaiError, IdentityUnavailable, RestoreError, ConfigError) as error:
         raise click.ClickException(str(error)) from error
 
 
@@ -152,6 +151,7 @@ def preset_commands():
 @click.pass_obj
 def capture_preset(settings: Settings, name: str, force: bool):
     """Capture supported windows as app/title/device rules without moving them."""
+    from spacekeeper.presets import Preset, PresetStore
     with operational_errors():
         snapshot = desktop(settings).observe(deadline=time.monotonic() + settings.timeout)
         preset = Preset.capture(snapshot)
@@ -163,6 +163,7 @@ def capture_preset(settings: Settings, name: str, force: bool):
 @click.pass_obj
 def list_presets(settings: Settings):
     """List named presets without querying the desktop."""
+    from spacekeeper.presets import PresetStore
     with operational_errors():
         names = PresetStore(settings.config_dir).entries()
         click.echo('\n'.join(names) if names else 'No presets.')
@@ -173,6 +174,7 @@ def list_presets(settings: Settings):
 @click.pass_obj
 def show_preset(settings: Settings, name: str):
     """Print a validated preset's YAML without querying the desktop."""
+    from spacekeeper.presets import PresetStore
     with operational_errors():
         click.echo(PresetStore(settings.config_dir).load(name).to_yaml(), nl=False)
 
@@ -182,6 +184,7 @@ def show_preset(settings: Settings, name: str):
 @click.pass_obj
 def plan_preset(settings: Settings, name: str):
     """Preview current matches and targets without moving windows or creating state."""
+    from spacekeeper.presets import PresetStore
     with operational_errors():
         preset = PresetStore(settings.config_dir).load(name)
         snapshot = desktop(settings).observe(deadline=time.monotonic() + settings.timeout)
@@ -203,6 +206,7 @@ def apply_preset(ctx: click.Context, name: str):
     The last matched window per monitor becomes visible; the last rule's last
     matched window receives final focus. No missing applications are launched.
     """
+    from spacekeeper.presets import PresetStore
     settings = ctx.obj
     with operational_errors():
         preset = PresetStore(settings.config_dir).load(name)

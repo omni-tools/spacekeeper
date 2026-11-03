@@ -10,6 +10,7 @@ from uuid import UUID
 
 import yaml
 
+from spacekeeper.config import ConfigError
 from spacekeeper.matching import WindowRule
 from spacekeeper.planner import (DecisionStatus, Reason, RestorePlan, VisibleTarget, WindowDecision,
                                  WindowTarget, unsupported_reason)
@@ -17,7 +18,7 @@ from spacekeeper.snapshot import Snapshot
 from spacekeeper.storage import SnapshotStore, StorageError, StorageFailure, validate_name
 
 
-class PresetError(ValueError):
+class PresetError(ConfigError):
     pass
 
 

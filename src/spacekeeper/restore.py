@@ -7,16 +7,18 @@ import os
 from pathlib import Path
 import stat
 import time
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from spacekeeper.identity import IdentityUnavailable
 from spacekeeper.matching import WindowRule
 from spacekeeper.planner import DecisionStatus, Reason, RestorePlan, WindowTarget, plan_restore
-from spacekeeper.presets import Preset
 from spacekeeper.snapshot import Snapshot, WindowIdentity
 from spacekeeper.storage import SnapshotStore
 from spacekeeper.transitions import Desktop, TransitionStatus, WindowTransitions
 from spacekeeper.yabai import YabaiError, YabaiFailure
+
+if TYPE_CHECKING:
+    from spacekeeper.presets import Preset
 
 
 class RestoreError(RuntimeError):
@@ -117,8 +119,11 @@ class RestoreCoordinator:
 
     def _focus(self, identity: WindowIdentity, session, display_uuid: str | None) -> None:
         deadline = self.clock() + self.timeout
-        self.desktop.focus(identity, session, deadline=deadline)
-        consecutive = 0
+        initial = self.desktop.focus(identity, session, deadline=deadline)
+        consecutive = int(initial is not None and initial.focus_ready and
+                          (display_uuid is None or initial.window.display_uuid == display_uuid))
+        if consecutive:
+            self.sleep(min(self.interval, max(0, deadline - self.clock())))
         while self.clock() < deadline:
             try:
                 observed = self.desktop.observe_window(identity, session, deadline=deadline)
@@ -137,7 +142,7 @@ class RestoreCoordinator:
     def restore(self, saved: Snapshot, *, preserve: tuple[WindowRule, ...] = ()) -> RestoreReport:
         return self._restore(saved, lambda before: plan_restore(saved, before, preserve=preserve))
 
-    def apply_preset(self, preset: Preset) -> RestoreReport:
+    def apply_preset(self, preset: 'Preset') -> RestoreReport:
         return self._restore(None, preset.plan)
 
     def _restore(self, saved: Snapshot | None, build_plan: Callable[[Snapshot], RestorePlan]) -> RestoreReport:

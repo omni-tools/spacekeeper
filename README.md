@@ -147,6 +147,7 @@ Identical app/title selectors with different targets cannot be represented and
 are reported instead of guessed. Preset names require `--force` for replacement.
 YAML uses safe loading; duplicate keys, aliases, unknown fields, and invalid types
 are rejected. Presets must fit within 64 KiB.
+The YAML parser is loaded only by preset commands; snapshot commands do not load it.
 
 ## Backend foundation
 
@@ -192,6 +193,9 @@ Target reads also retry the brief interval when fullscreen has exposed a window
 before its Space query includes that window's membership, without resending the toggle.
 The last confirmed transition result is reused when it already satisfies the
 window target; an identical verification loop is not repeated.
+A fresh guard that finds a window already focused can supply the first settling
+sample. Confirmation still requires a new observation after the polling interval;
+no observation from before a mutation is reused to verify that mutation.
 
 `restore.py` holds a per-user restore lock across state directories and verifies
 its fresh backup before invoking window transitions. It restores visible windows

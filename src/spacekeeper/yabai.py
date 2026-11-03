@@ -292,10 +292,13 @@ class Yabai:
         observed = self.observe_window(identity, session, deadline=deadline)
         return observed, observed.window
 
-    def focus(self, identity: WindowIdentity, session: SessionIdentity, *, deadline: float | None = None) -> None:
+    def focus(self, identity: WindowIdentity, session: SessionIdentity,
+              *, deadline: float | None = None) -> WindowObservation | None:
         observed, window = self._guard(identity, session, deadline)
-        if not _focus_ready(observed, window):
-            self._command("-m", "window", "--focus", str(identity.window_id), deadline=deadline)
+        if _focus_ready(observed, window):
+            return observed
+        self._command("-m", "window", "--focus", str(identity.window_id), deadline=deadline)
+        return None
 
     def fullscreen(self, identity: WindowIdentity, session: SessionIdentity, desired: bool,
                    display_uuid: str, *, deadline: float | None = None) -> None:

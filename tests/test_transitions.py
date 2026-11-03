@@ -12,6 +12,45 @@ from tests.support import A, B, DISPLAYS, SESSION, observe, window
 
 
 class TransitionTests(unittest.TestCase):
+    def test_reused_focus_confirmation_still_rechecks_owner_before_toggle(self):
+        desktop = FakeYabai(window(focused=True))
+        engine = self.engine(desktop)
+        sleep = engine.sleep
+        replaced = []
+        def replace_during_confirmation(duration):
+            sleep(duration)
+            if not replaced:
+                replaced.append(True)
+                desktop.windows[1] = replace(desktop.windows[1], owner=ProcessIdentity(101, 2_000_000, 0))
+        engine.sleep = replace_during_confirmation
+        result = engine.apply(self.target(), SESSION)
+        self.assertEqual((result.status, result.reason), (Status.SKIPPED, 'owner_changed'))
+        self.assertFalse(any('--toggle' in command for command in desktop.commands))
+
+    def test_lost_focus_resets_a_reused_guard_sample(self):
+        desktop = FakeYabai(window(focused=True))
+        engine = self.engine(desktop)
+        toggles = []
+        original = desktop.__call__
+        observe_window = engine.desktop.observe_window
+        observations = []
+        def focus_loss(*args, **options):
+            observed = observe_window(*args, **options)
+            observations.append(True)
+            if len(observations) == 3:
+                return replace(observed, window=replace(observed.window, focused=False),
+                               spaces=tuple(replace(s, focused=False) for s in observed.spaces))
+            return observed
+        def runner(argv, **options):
+            if '--toggle' in argv:
+                toggles.append(engine.clock())
+            return original(argv, **options)
+        engine.desktop.observe_window = focus_loss
+        engine.desktop.runner = runner
+        result = engine.apply(self.target(), SESSION)
+        self.assertEqual(result.status, Status.VERIFIED)
+        self.assertTrue(toggles and min(toggles) >= 0.3)
+
     def engine(self, desktop):
         clock = Clock()
         adapter = Yabai(executable="/synthetic/yabai", runner=desktop, identities=desktop, clock=clock)

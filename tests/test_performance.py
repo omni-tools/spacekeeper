@@ -14,6 +14,21 @@ from tests.support import A, B, SESSION, observe, window
 
 
 class QueryBudgetTests(unittest.TestCase):
+    def test_already_focused_guard_can_seed_confirmation_without_a_duplicate_read(self):
+        fake, clock = FakeYabai(window(focused=True)), Clock()
+        engine = WindowTransitions(self.adapter(fake, clock), clock=clock, sleep=clock.sleep)
+        result = engine.apply(WindowTarget(window().identity, A, True), SESSION)
+        self.assertEqual(result.status, 'verified')
+        self.assertLessEqual(sum(args[2] == '--windows' for args in fake.queries), 12)
+
+    def test_snapshot_commands_do_not_import_the_yaml_parser(self):
+        import subprocess
+        import sys
+        code = ('from click.testing import CliRunner; from spacekeeper.cli import main; import sys; '
+                'result=CliRunner().invoke(main,["--version"]); '
+                'assert result.exit_code==0; assert "yaml" not in sys.modules')
+        subprocess.run([sys.executable, '-c', code], check=True, capture_output=True)
+
     def adapter(self, fake, clock):
         return Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
 
