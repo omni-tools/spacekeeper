@@ -42,6 +42,11 @@ creation timestamps, without querying or changing desktop windows.
 skips or blocked work, monitor fallbacks, and final visibility/focus targets.
 It performs no commands.
 
+`storage.py` saves named observations atomically under `snapshots/`, with private,
+verified pre-restore files in `backups/` and matching results in `reports/` under
+the chosen state directory. Default captures replace automatically; other names
+require an explicit overwrite. Listing and loading do not create storage.
+
 `process.py` runs shell-free argument arrays with command deadlines and a combined
 stdout/stderr limit. `yabai.py` uses that injectable runner for parallel read-only
 queries, retries changing observations, and rechecks session/window ownership
@@ -60,7 +65,7 @@ polling tolerates that gap within its deadline and rechecks ownership when the
 window returns. A permanently missing or replaced window is still skipped.
 
 The transition engine is not connected to the CLI. The next implementation round
-adds the restore coordinator, pre-restore backups, restore lock, named storage,
+adds the restore coordinator and restore lock using the snapshot storage,
 final visibility/focus restoration, whole-restore verification, and CLI behavior.
 The coordinator must hold its lock and persist a valid backup before invoking
 window transitions.
