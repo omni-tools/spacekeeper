@@ -2,9 +2,9 @@
 
 Capture and restore macOS fullscreen window arrangements through yabai.
 
-**Status: snapshot/identity/planner foundation, yabai adapter, internal window transitions, Click command scaffold, and working prototypes. CLI capture/list/restore behavior is not implemented yet.**
+**Status: v0 capture/list/restore CLI implemented, with synthetic end-to-end tests. Broader live restore validation is still in progress.**
 
-The first version will save named snapshots of the running macOS session and restore fullscreen states and original monitors. YAML presets, flexible app/title matching, preserve filters, reopening missing windows, and scripting-addition-assisted Space ordering are planned for later versions.
+Save named snapshots of the running macOS session and restore fullscreen states and original monitors. YAML presets, flexible app/title matching, preserve filters, reopening missing windows, and scripting-addition-assisted Space ordering are planned for later versions.
 
 ## Start here
 
@@ -24,12 +24,60 @@ uv run spacekeeper capture --help
 uv run spacekeeper restore --help
 ```
 
-uv creates a local `.venv`. The Click scaffold provides `capture [NAME] [--force]`,
-`list`, `restore [NAME]`, and `--version`. Capture/list/restore currently
-exit with an explicit not-implemented error and do not query or change the desktop.
+uv creates a local `.venv`. The CLI provides `capture [NAME] [--force]`,
+`list`, `restore [NAME]`, and `--version`.
 You can also run `uv run python -m spacekeeper --help`.
 
 Build the wheel and source distribution with `uv build`.
+
+## Use
+
+```sh
+uv run spacekeeper capture             # Replace the default snapshot.
+uv run spacekeeper capture work        # Existing named snapshots require --force.
+uv run spacekeeper list
+uv run spacekeeper restore work        # Changes the desktop.
+```
+
+**Restore exits fullscreen for extra windows absent from the snapshot.** Extra
+ordinary windows stay open and unchanged. Capture and list do not change desktop
+windows. Snapshots match surviving windows in the same boot/login session; they
+do not reopen closed windows or restore Space ordering or ordinary window frames.
+
+Snapshot names are 1–64 ASCII letters, digits, dots, underscores, or hyphens,
+starting with a letter or digit. The default state directory is
+`~/.local/state/spacekeeper`, with `snapshots/`, `backups/`, and `reports/`.
+Restore prints its verified backup path before any window operations and saves
+a detailed report. To recover that pre-restore state, use the backup filename
+without `.json` as its ID:
+
+```sh
+uv run spacekeeper restore --backup BACKUP_ID
+uv run spacekeeper --state-dir /path/to/state capture work
+```
+
+Global options precede the command. `--config-dir` selects the optional
+`config.json` directory (default `~/.config/spacekeeper`). Its accepted fields
+are `state_dir`, `yabai` (executable path), and `timeout` (seconds, default 12).
+Relative paths in this file resolve against its directory. Neither listing nor
+configuration loading creates missing directories.
+
+```json
+{"timeout": 20}
+```
+
+CLI options override `SPACEKEEPER_STATE_DIR`, `SPACEKEEPER_CONFIG_DIR`,
+`SPACEKEEPER_YABAI`, and `SPACEKEEPER_TIMEOUT`; those override file settings and
+defaults. `--yabai` and `--timeout` provide explicit overrides. Invalid
+configuration is reported with an error. A per-user lock under
+`/private/tmp/spacekeeper-UID/` prevents restores across different state roots
+from running together.
+
+Exit codes: **0** for success, **1** for operational errors or incomplete
+restores, **2** for usage errors. A complete restore confirms supported targets,
+visible windows, and focus. Expected system-window exclusions are listed
+separately; closed, unsupported, blocked, or failed targets make the result
+incomplete. Structured JSON reports are stored privately; stdout is human-readable.
 
 ## Backend foundation
 
@@ -69,7 +117,7 @@ its fresh backup before invoking window transitions. It restores visible windows
 and final focus last, verifies the whole result, and writes a private report beside
 the backup collection. A single matching observation is insufficient for success.
 Expected system-window exclusions are reported separately from unsupported,
-skipped, blocked, and failed targets. The next round connects this to the CLI.
+skipped, blocked, and failed targets. The Click commands use this coordinator.
 
 Run the automated tests with synthetic observations and injected native calls:
 

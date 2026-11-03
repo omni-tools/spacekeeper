@@ -88,9 +88,11 @@ class RestoreReport:
 class RestoreCoordinator:
     def __init__(self, desktop: Desktop, store: SnapshotStore, *, lock_path: Path | None = None,
                  timeout: float = 12, poll_interval: float = 0.2,
-                 clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
+                 clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
+                 on_backup: Callable[[Path], None] | None = None):
         self.desktop, self.store, self.lock_path = desktop, store, lock_path
         self.timeout, self.interval, self.clock, self.sleep = timeout, poll_interval, clock, sleep
+        self.on_backup = on_backup
         self.transitions = WindowTransitions(desktop, transition_timeout=timeout, poll_interval=poll_interval,
                                              clock=clock, sleep=sleep)
 
@@ -132,6 +134,8 @@ class RestoreCoordinator:
         with restore_lock(self.lock_path):
             before = self._observe(self.clock() + self.timeout)
             backup = self.store.backup(before)  # Must succeed and read back before any mutation.
+            if self.on_backup is not None:
+                self.on_backup(backup)
             plan = plan_restore(saved, before)
             outcomes, issues = [], [RestoreIssue("planning", item.reason.value, item.window_id, item.display_uuid)
                                     for item in plan.issues]
