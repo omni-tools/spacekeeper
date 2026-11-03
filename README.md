@@ -2,7 +2,7 @@
 
 Capture and restore macOS fullscreen window arrangements through yabai.
 
-**Status: uv package, snapshot/identity/planner foundation, Click command scaffold, and working prototypes. CLI capture/list/restore behavior is not implemented yet.**
+**Status: snapshot/identity/planner foundation, yabai adapter, internal window transitions, Click command scaffold, and working prototypes. CLI capture/list/restore behavior is not implemented yet.**
 
 The first version will save named snapshots of the running macOS session and restore fullscreen states and original monitors. YAML presets, flexible app/title matching, preserve filters, reopening missing windows, and scripting-addition-assisted Space ordering are planned for later versions.
 
@@ -40,8 +40,30 @@ Additional metadata can retain raw yabai query data for later capabilities.
 creation timestamps, without querying or changing desktop windows.
 `planner.py` compares two observations and returns window targets, reasons for
 skips or blocked work, monitor fallbacks, and final visibility/focus targets.
-It performs no commands. The future executor must recheck identities and resolve
-current Space indexes before applying any target.
+It performs no commands.
+
+`process.py` runs shell-free argument arrays with command deadlines and a combined
+stdout/stderr limit. `yabai.py` uses that injectable runner for parallel read-only
+queries, retries changing observations, and rechecks session/window ownership
+before window operations. A move selects a normal Space by stable ID, then
+resolves its current index immediately before the command. Capability failures
+are reported without attempting scripting-addition setup.
+
+`transitions.py` implements the internal, sequential per-window engine: confirm
+fullscreen exit, move to the target monitor, confirm focus there, then enter
+fullscreen and verify both state and monitor. Bounded polling requires consecutive
+matching observations. Closed windows, changed owners, timeouts, failed commands,
+and unsupported operations return explicit incomplete results. An operation's
+attempt log does not claim that the operation succeeded.
+Native fullscreen can temporarily omit a surviving window from yabai queries;
+polling tolerates that gap within its deadline and rechecks ownership when the
+window returns. A permanently missing or replaced window is still skipped.
+
+The transition engine is not connected to the CLI. The next implementation round
+adds the restore coordinator, pre-restore backups, restore lock, named storage,
+final visibility/focus restoration, whole-restore verification, and CLI behavior.
+The coordinator must hold its lock and persist a valid backup before invoking
+window transitions.
 
 Run the automated tests with synthetic observations and injected native calls:
 
@@ -58,6 +80,22 @@ uv run python -m unittest tests.live_identity -v
 These inspect the current process and a temporary child, without printing identity
 values. They require access to the boot identifier and a graphical login session.
 They do not verify fullscreen or monitor restoration.
+
+The optional adapter check performs a read-only observation through the running
+yabai service and validates its in-memory serialization:
+
+```sh
+uv run python -m unittest tests.live_yabai -v
+```
+
+It prints no window titles or identity values. Fullscreen transition tests use
+an in-memory yabai simulator; they are not live desktop-restoration evidence.
+A separate scoped native test has also completed fullscreen entry, a monitor
+round trip through the planner, extra-fullscreen exit, and closed-window skipping
+with a disposable TextEdit document. The test used a fresh backup and verified
+that existing fullscreen/monitor states, visible windows, and final focus were
+restored. This covers the internal engine with that app, rather than the future
+whole-session restore CLI.
 
 Identity matching uses boot UUID, user/login session, and window ID plus owning
 PID/process start time. Unreadable owners are unsupported. A reused saved window
