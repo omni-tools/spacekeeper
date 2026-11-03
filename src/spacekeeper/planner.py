@@ -155,7 +155,7 @@ def plan_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
         target = targets.get(space.visible_window_id)
         if target is not None and target.display_uuid == space.display_uuid:
             visible.append(VisibleTarget(space.display_uuid, target.identity))
-        elif space.window_ids:
+        elif space.visible_window_id is not None:
             issues.append(PlanIssue(Reason.VISIBLE_WINDOW_UNAVAILABLE, space.visible_window_id, space.display_uuid))
 
     focused = next((w for w in saved.windows if w.focused), None)

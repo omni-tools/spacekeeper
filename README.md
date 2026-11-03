@@ -64,11 +64,12 @@ Native fullscreen can temporarily omit a surviving window from yabai queries;
 polling tolerates that gap within its deadline and rechecks ownership when the
 window returns. A permanently missing or replaced window is still skipped.
 
-The transition engine is not connected to the CLI. The next implementation round
-adds the restore coordinator and restore lock using the snapshot storage,
-final visibility/focus restoration, whole-restore verification, and CLI behavior.
-The coordinator must hold its lock and persist a valid backup before invoking
-window transitions.
+`restore.py` holds a per-user restore lock across state directories and verifies
+its fresh backup before invoking window transitions. It restores visible windows
+and final focus last, verifies the whole result, and writes a private report beside
+the backup collection. A single matching observation is insufficient for success.
+Expected system-window exclusions are reported separately from unsupported,
+skipped, blocked, and failed targets. The next round connects this to the CLI.
 
 Run the automated tests with synthetic observations and injected native calls:
 
