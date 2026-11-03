@@ -2,7 +2,7 @@
 
 Capture and restore macOS fullscreen window arrangements through yabai.
 
-**Status: v0 capture/list/restore CLI implemented, with synthetic end-to-end tests. Broader live restore validation is still in progress.**
+**Status: v0 capture/list/restore CLI implemented, with synthetic end-to-end tests and a scoped native CLI restore check.**
 
 Save named snapshots of the running macOS session and restore fullscreen states and original monitors. YAML presets, flexible app/title matching, preserve filters, reopening missing windows, and scripting-addition-assisted Space ordering are planned for later versions.
 
@@ -153,6 +153,16 @@ with a disposable TextEdit document. The test used a fresh backup and verified
 that existing fullscreen/monitor states, visible windows, and final focus were
 restored. This covers the internal engine with that app, rather than the future
 whole-session restore CLI.
+
+The completed v0 CLI has subsequently passed a quiet native smoke test: a
+disposable TextEdit window entered fullscreen and moved to another monitor, then
+CLI restore applied the extra-fullscreen exit policy and verified the complete
+saved result. It exited 0 with no report issues; existing window states, visible
+Spaces, and final focus were restored, and the test document was closed. The
+check used a scoped native runner that permitted fullscreen/monitor mutations
+only for that disposable window. Real capture/list commands and an isolated
+wheel installation were checked separately. Other applications and topology
+changes still require their own live coverage.
 
 Identity matching uses boot UUID, user/login session, and window ID plus owning
 PID/process start time. Unreadable owners are unsupported. A reused saved window
