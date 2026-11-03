@@ -31,6 +31,55 @@ class AdapterTests(unittest.TestCase):
         self.assertIsNone(observation.windows[0].owner)
         self.assertEqual(observation.metadata["owner_issues"], {"101": IdentityFailure.ACCESS_DENIED.value})
 
+    def test_capture_joins_placement_without_requesting_expensive_window_fields(self):
+        desktop = FakeYabai(window(fullscreen=True, display=B), window(2))
+        desktop.space_indexes[1001] = 9
+        snapshot = self.adapter(desktop).observe()
+        self.assertEqual((snapshot.windows[0].display_uuid, snapshot.windows[0].space_id), (B, 1001))
+        queries = [args for args in desktop.queries if args[2] == '--windows']
+        self.assertEqual(len(queries), 2)
+        for args in queries:
+            self.assertGreater(len(args), 3)
+            self.assertNotIn('display', args[3].split(','))
+            self.assertNotIn('space', args[3].split(','))
+
+    def test_capture_uses_targeted_fallback_for_unplaced_windows(self):
+        desktop = FakeYabai(window(display_uuid=None, space_id=None))
+        snapshot = self.adapter(desktop).observe()
+        self.assertIsNone(snapshot.windows[0].space_id)
+        self.assertIsNone(snapshot.windows[0].display_uuid)
+        targeted = [args for args in desktop.queries if '--window' in args]
+        self.assertEqual(len(targeted), 2)
+        self.assertTrue(all(args[-1] == '1' for args in targeted))
+
+    def test_capture_preserves_ambiguous_sticky_placement_instead_of_guessing(self):
+        desktop = FakeYabai(window(sticky=True))
+        def runner(argv, **options):
+            result = desktop(argv, **options)
+            if argv[3] == '--spaces':
+                spaces = json.loads(result.stdout)
+                next(s for s in spaces if s['id'] == 102)['windows'].append(1)
+                return ProcessResult(0, json.dumps(spaces).encode(), b'')
+            return result
+        snapshot = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop).observe()
+        self.assertEqual((snapshot.windows[0].space_id, snapshot.windows[0].display_uuid), (101, A))
+        self.assertEqual(len([args for args in desktop.queries if '--window' in args]), 2)
+
+    def test_capture_retries_owner_changes_during_placement_fallback(self):
+        desktop = FakeYabai(window(display_uuid=None, space_id=None))
+        def runner(argv, **options):
+            result = desktop(argv, **options)
+            if '--window' in argv:
+                data = json.loads(result.stdout)
+                data['pid'] += 1
+                return ProcessResult(0, json.dumps(data).encode(), b'')
+            return result
+        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop)
+        with self.assertRaises(YabaiError) as caught:
+            adapter.observe()
+        self.assertEqual(caught.exception.reason, Failure.DESKTOP_CHANGED)
+        self.assertEqual(desktop.query_counts['windows'], 6)
+
     def test_changing_topology_is_retried_but_bounded(self):
         desktop = FakeYabai(window())
         def churn(domain, count):
@@ -75,7 +124,7 @@ class AdapterTests(unittest.TestCase):
         desktop = FakeYabai(window())
         def runner(argv, **options):
             result = desktop(argv, **options)
-            if argv[-1] == "--windows":
+            if argv[1:4] == ("-m", "query", "--windows"):
                 data = json.loads(result.stdout)
                 data[0]["is-native-fullscreen"] = "false"
                 return ProcessResult(0, json.dumps(data).encode(), b"")

@@ -30,6 +30,7 @@ class FakeYabai:
         self.commands = []
         self.timeouts = []
         self.query_counts = {domain: 0 for domain in ("displays", "spaces", "windows")}
+        self.queries = []
         self.space_indexes = {}
         self.effects = {"focus": True, "toggle": True, "move": True}
         self.failures = {}
@@ -74,10 +75,22 @@ class FakeYabai:
             self.timeouts.append(timeout)
             args = argv[1:]
             if args[:2] == ("-m", "query"):
+                self.queries.append(args)
                 domain = args[2][2:]
                 self.query_counts[domain] += 1
                 self.on_query(domain, self.query_counts[domain])
-                return ProcessResult(0, json.dumps(self.raw()[domain]).encode(), b"")
+                data = self.raw()[domain]
+                if '--window' in args:
+                    window_id = int(args[args.index('--window') + 1])
+                    data = next((item for item in data if item['id'] == window_id), None)
+                    if data is None:
+                        return ProcessResult(1, b'', b'could not retrieve window details.')
+                if len(args) > 3 and not args[3].startswith('--'):
+                    properties = args[3].split(',')
+                    def project(item):
+                        return {key: value for key, value in item.items() if key in properties}
+                    data = [project(item) for item in data] if isinstance(data, list) else project(data)
+                return ProcessResult(0, json.dumps(data).encode(), b"")
             self.commands.append(args)
             if args[1:3] == ("window", "--focus"):
                 operation, id = "focus", int(args[3])

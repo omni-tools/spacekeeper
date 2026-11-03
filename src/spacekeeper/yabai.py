@@ -17,6 +17,12 @@ from spacekeeper.snapshot import (
 )
 
 
+# Placement is joined from Space membership. Asking yabai to resolve space/display
+# for every window repeats expensive WindowServer lookups on large desktops.
+WINDOW_PROPERTIES = ('id,pid,app,title,frame,role,subrole,root-window,has-focus,'
+                     'is-native-fullscreen,is-minimized,is-hidden,is-sticky,can-move,can-resize')
+
+
 class YabaiFailure(StrEnum):
     NOT_FOUND = "not_found"
     COMMAND_FAILED = "command_failed"
@@ -93,7 +99,10 @@ class Yabai:
             raise YabaiError(YabaiFailure.OUTPUT_LIMIT, "yabai output exceeded its limit.")
         if result.returncode != 0:
             diagnostic = result.stderr.decode("utf-8", errors="replace").lower()
-            if "scripting-addition" in diagnostic or "scripting addition" in diagnostic:
+            if ("--window" in args and "query" in args and
+                    "could not retrieve window details" in diagnostic):
+                reason = YabaiFailure.WINDOW_MISSING
+            elif "scripting-addition" in diagnostic or "scripting addition" in diagnostic:
                 reason = YabaiFailure.CAPABILITY_UNAVAILABLE
             elif "accessibility" in diagnostic or "permission" in diagnostic:
                 reason = YabaiFailure.ACCESS_DENIED
@@ -105,15 +114,27 @@ class Yabai:
             raise YabaiError(reason, f"yabai command failed: {reason}.", returncode=result.returncode)
         return result.stdout
 
-    def query(self, domain: str, *, deadline: float | None = None) -> list[dict]:
+    def query(self, domain: str, *, properties: str | None = None, window_id: int | None = None,
+              deadline: float | None = None) -> list[dict]:
         if domain not in ("displays", "spaces", "windows"):
             raise ValueError("Unknown yabai query domain.")
+        if window_id is not None and (domain != 'windows' or type(window_id) is not int or window_id < 1):
+            raise ValueError('A positive window ID may only select a window query.')
+        args = ('-m', 'query', '--' + domain)
+        if properties is not None:
+            args += (properties,)
+        if window_id is not None:
+            args += ('--window', str(window_id))
         def pairs(items):
             if len(dict(items)) != len(items):
                 raise ValueError("Duplicate object keys.")
             return dict(items)
         try:
-            data = json.loads(self._command("-m", "query", "--" + domain, deadline=deadline), object_pairs_hook=pairs)
+            data = json.loads(self._command(*args, deadline=deadline), object_pairs_hook=pairs)
+            if window_id is not None:
+                if type(data) is not dict or type(data.get('id')) is not int or data['id'] != window_id:
+                    raise ValueError
+                data = [data]
             if type(data) is not list or not all(type(item) is dict for item in data):
                 raise ValueError
             return data
@@ -123,7 +144,33 @@ class Yabai:
     def _queries(self, deadline: float | None) -> dict[str, list[dict]]:
         domains = ("displays", "spaces", "windows")
         with ThreadPoolExecutor(max_workers=3) as pool:
-            return dict(zip(domains, pool.map(lambda domain: self.query(domain, deadline=deadline), domains)))
+            raw = dict(zip(domains, pool.map(
+                lambda domain: self.query(domain, properties=WINDOW_PROPERTIES if domain == 'windows' else None,
+                                          deadline=deadline), domains)))
+        try:
+            membership = {}
+            for space in raw['spaces']:
+                for window_id in space['windows']:
+                    membership.setdefault(window_id, []).append(space)
+            for window in raw['windows']:
+                matches = membership.get(window['id'], [])
+                if len(matches) == 1:
+                    window.update(space=matches[0]['index'], display=matches[0]['display'])
+                else:
+                    # Sticky windows can belong to several Spaces; hidden/system
+                    # windows can have none. Preserve their actual placement.
+                    placement = self.query('windows', properties='id,pid,display,space',
+                                           window_id=window['id'], deadline=deadline)[0]
+                    if placement['pid'] != window['pid']:
+                        raise YabaiError(YabaiFailure.DESKTOP_CHANGED, 'Window owner changed during capture.')
+                    window.update(space=placement['space'], display=placement['display'])
+        except YabaiError as error:
+            if error.reason == YabaiFailure.WINDOW_MISSING:
+                raise YabaiError(YabaiFailure.DESKTOP_CHANGED, 'Window closed during capture.') from error
+            raise
+        except (KeyError, TypeError, ValueError) as error:
+            raise YabaiError(YabaiFailure.INVALID_RESPONSE, 'Invalid yabai placement data.') from error
+        return raw
 
     def _owners(self, raw_windows: list[dict]) -> tuple[dict[int, ProcessIdentity | None], dict[str, str]]:
         owners, issues = {}, {}
@@ -148,9 +195,14 @@ class Yabai:
         for _ in range(self.capture_attempts):
             started = datetime.now().astimezone().isoformat()
             session = self.identities.session()
-            before = self._queries(deadline)
-            owners_before, _ = self._owners(before["windows"])
-            after = self._queries(deadline)
+            try:
+                before = self._queries(deadline)
+                owners_before, _ = self._owners(before["windows"])
+                after = self._queries(deadline)
+            except YabaiError as error:
+                if error.reason == YabaiFailure.DESKTOP_CHANGED:
+                    continue
+                raise
             owners, issues = self._owners(after["windows"])
             if session != self.identities.session() or owners_before != owners:
                 continue
