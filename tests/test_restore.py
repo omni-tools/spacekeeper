@@ -167,3 +167,14 @@ class RestoreTests(unittest.TestCase):
         report = coordinator.restore(observe())
         self.assertFalse(report.complete)
         self.assertTrue(any(i.reason == 'timeout' for i in report.issues))
+
+    def test_disappeared_system_window_is_an_exclusion_not_a_failed_target(self):
+        report = self.coordinator(FakeYabai()).restore(observe(window(sticky=True), visible_ids=()))
+        self.assertTrue(report.complete)
+        self.assertEqual(report.windows[0].status, 'excluded')
+
+    def test_previously_supported_window_becoming_protected_is_incomplete(self):
+        saved = observe(window(), visible_ids=())
+        report = self.coordinator(FakeYabai(window(sticky=True))).restore(saved)
+        self.assertFalse(report.complete)
+        self.assertEqual(report.windows[0].status, 'unsupported')

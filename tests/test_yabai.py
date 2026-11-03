@@ -160,6 +160,20 @@ class AdapterTests(unittest.TestCase):
                 self.adapter(desktop).fullscreen(window().identity, SESSION, True, A)
             self.assertEqual(desktop.commands, [])
 
+    def test_focus_window_flag_does_not_override_inactive_space(self):
+        desktop = FakeYabai(window(focused=True))
+        adapter = self.adapter(desktop)
+        original = adapter.observe
+        def inactive_space(**options):
+            snapshot = original(**options)
+            if not desktop.commands:
+                return replace(snapshot, spaces=tuple(replace(s, visible=False, focused=False, visible_window_id=None)
+                                                      for s in snapshot.spaces))
+            return snapshot
+        adapter.observe = inactive_space
+        adapter.focus(window().identity, SESSION)
+        self.assertEqual(desktop.commands, [('-m', 'window', '--focus', '1')])
+
     def test_custom_executable_must_be_absolute(self):
         for executable in ("yabai", "./yabai", "/synthetic/\0yabai"):
             with self.subTest(executable=executable), self.assertRaises(ValueError):

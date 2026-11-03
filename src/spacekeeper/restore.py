@@ -140,6 +140,9 @@ class RestoreCoordinator:
             outcomes, issues = [], [RestoreIssue("planning", item.reason.value, item.window_id, item.display_uuid)
                                     for item in plan.issues]
             session_changed = False
+            saved_ids = {window.id for window in saved.windows}
+            protected_saved = {window.id for window in saved.windows if window.sticky or not window.root_window or
+                               (window.role, window.subrole) != ('AXWindow', 'AXStandardWindow')}
             if plan.accepted:
                 for decision in plan.windows:
                     if session_changed:
@@ -152,7 +155,9 @@ class RestoreCoordinator:
                                                       decision.monitor_fallback, result.attempted_operations))
                         session_changed = result.reason == YabaiFailure.SESSION_CHANGED
                     else:
-                        status = "excluded" if decision.reason == Reason.PROTECTED_WINDOW else decision.status.value
+                        expected_exclusion = (decision.reason == Reason.PROTECTED_WINDOW and
+                                              (decision.window_id in protected_saved or decision.window_id not in saved_ids))
+                        status = "excluded" if expected_exclusion else decision.status.value
                         outcomes.append(WindowOutcome(decision.window_id, status, decision.reason.value,
                                                       decision.monitor_fallback))
 

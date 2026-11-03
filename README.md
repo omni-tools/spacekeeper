@@ -105,7 +105,10 @@ are reported without attempting scripting-addition setup.
 `transitions.py` implements the internal, sequential per-window engine: confirm
 fullscreen exit, move to the target monitor, confirm focus there, then enter
 fullscreen and verify both state and monitor. Bounded polling requires consecutive
-matching observations. Closed windows, changed owners, timeouts, failed commands,
+matching observations of the window and its Space. Focus must include a visible,
+focused owning Space. A guard-refused focus change before a fullscreen command
+can be retried up to three times within the same deadline; a sent toggle is never
+blindly retried. Closed windows, changed owners, timeouts, failed commands,
 and unsupported operations return explicit incomplete results. An operation's
 attempt log does not claim that the operation succeeded.
 Native fullscreen can temporarily omit a surviving window from yabai queries;

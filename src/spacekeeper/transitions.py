@@ -55,7 +55,7 @@ class WindowTransitions:
         self.clock = clock
         self.sleep = sleep
 
-    def _checked(self, target: WindowTarget, session: SessionIdentity, deadline: float) -> Window:
+    def _checked(self, target: WindowTarget, session: SessionIdentity, deadline: float) -> tuple[Snapshot, Window]:
         observed = self.desktop.observe(deadline=deadline)
         if observed.session != session:
             raise YabaiError(YabaiFailure.SESSION_CHANGED, "The graphical session changed during transition.")
@@ -72,17 +72,24 @@ class WindowTransitions:
             raise YabaiError(YabaiFailure.UNSUPPORTED_WINDOW, "The window is no longer a supported target.")
         if target.display_uuid not in {d.uuid for d in observed.displays}:
             raise YabaiError(YabaiFailure.DISPLAY_MISSING, "The target monitor disconnected during transition.")
-        return window
+        return observed, window
 
     def _wait(self, target: WindowTarget, session: SessionIdentity, deadline: float,
-              predicate: Callable[[Window], bool]) -> Window:
+              predicate: Callable[[Window], bool], *, require_focus: bool = False,
+              space_fullscreen: bool | None = None) -> Window:
         consecutive = 0
         last_error = None
         while self.clock() < deadline:
             try:
-                window = self._checked(target, session, deadline)
+                observed, window = self._checked(target, session, deadline)
                 last_error = None
-                consecutive = consecutive + 1 if predicate(window) else 0
+                space = next((s for s in observed.spaces if s.id == window.space_id), None)
+                matches = predicate(window)
+                if require_focus:
+                    matches = matches and window.focused and space is not None and space.visible and space.focused
+                if space_fullscreen is not None:
+                    matches = matches and space is not None and space.fullscreen == space_fullscreen
+                consecutive = consecutive + 1 if matches else 0
             except YabaiError as error:
                 if error.reason not in (YabaiFailure.DESKTOP_CHANGED, YabaiFailure.WINDOW_MISSING):
                     raise
@@ -106,37 +113,50 @@ class WindowTransitions:
         """
         attempts = []
         try:
-            current = self._checked(target, session, self.clock() + self.timeout)
+            _, current = self._checked(target, session, self.clock() + self.timeout)
 
-            def focus(display_uuid: str) -> None:
-                deadline = self.clock() + self.timeout
+            def focus(display_uuid: str, deadline: float) -> None:
                 attempts.append("focus")
                 self.desktop.focus(target.identity, session, deadline=deadline)
-                self._wait(target, session, deadline, lambda w: w.focused and w.display_uuid == display_uuid)
+                self._wait(target, session, deadline, lambda w: w.display_uuid == display_uuid, require_focus=True)
+
+            def change_fullscreen(desired: bool, display_uuid: str) -> Window:
+                deadline = self.clock() + self.timeout
+                for attempt in range(3):
+                    focus(display_uuid, deadline)
+                    attempts.append('enter_fullscreen' if desired else 'exit_fullscreen')
+                    try:
+                        self.desktop.fullscreen(target.identity, session, desired, display_uuid, deadline=deadline)
+                    except YabaiError as error:
+                        # Only this guard error guarantees no toggle was sent.
+                        # Re-focus with fresh ownership checks, within the same
+                        # deadline; never blindly retry an actual toggle.
+                        if error.reason != YabaiFailure.FOCUS_CHANGED or attempt == 2:
+                            raise
+                        self.sleep(min(self.interval, max(0, deadline - self.clock())))
+                        continue
+                    return self._wait(target, session, deadline,
+                                      lambda w: w.fullscreen == desired and (not desired or w.display_uuid == display_uuid),
+                                      space_fullscreen=desired)
+                raise YabaiError(YabaiFailure.TIMEOUT, 'Fullscreen transition did not complete.')
 
             if current.fullscreen and (not target.fullscreen or current.display_uuid != target.display_uuid):
-                focus(current.display_uuid)
-                deadline = self.clock() + self.timeout
-                attempts.append("exit_fullscreen")
-                self.desktop.fullscreen(target.identity, session, False, current.display_uuid, deadline=deadline)
-                current = self._wait(target, session, deadline, lambda w: not w.fullscreen)
+                current = change_fullscreen(False, current.display_uuid)
 
             if current.display_uuid != target.display_uuid:
                 deadline = self.clock() + self.timeout
                 attempts.append("move_to_display")
                 self.desktop.move_to_display(target.identity, session, target.display_uuid, deadline=deadline)
                 current = self._wait(target, session, deadline,
-                                     lambda w: not w.fullscreen and w.display_uuid == target.display_uuid)
+                                     lambda w: not w.fullscreen and w.display_uuid == target.display_uuid,
+                                     space_fullscreen=False)
 
             if target.fullscreen and not current.fullscreen:
-                focus(target.display_uuid)
-                deadline = self.clock() + self.timeout
-                attempts.append("enter_fullscreen")
-                self.desktop.fullscreen(target.identity, session, True, target.display_uuid, deadline=deadline)
-                self._wait(target, session, deadline, lambda w: w.fullscreen and w.display_uuid == target.display_uuid)
+                change_fullscreen(True, target.display_uuid)
 
             self._wait(target, session, self.clock() + self.timeout,
-                       lambda w: w.fullscreen == target.fullscreen and w.display_uuid == target.display_uuid)
+                       lambda w: w.fullscreen == target.fullscreen and w.display_uuid == target.display_uuid,
+                       space_fullscreen=target.fullscreen)
             return TransitionResult(target.identity, TransitionStatus.VERIFIED, None, tuple(attempts))
         except YabaiError as error:
             if error.reason in (YabaiFailure.WINDOW_MISSING, YabaiFailure.OWNER_CHANGED):

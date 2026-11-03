@@ -36,6 +36,7 @@ class YabaiFailure(StrEnum):
     NO_NORMAL_SPACE = "no_normal_space"
     DESTINATION_CHANGED = "destination_changed"
     WINDOW_STATE_CHANGED = "window_state_changed"
+    FOCUS_CHANGED = "focus_changed"
 
 
 class YabaiError(RuntimeError):
@@ -180,21 +181,21 @@ class Yabai:
         return observed, window
 
     def focus(self, identity: WindowIdentity, session: SessionIdentity, *, deadline: float | None = None) -> None:
-        _, window = self._guard(identity, session, deadline)
-        if not window.focused:
+        observed, window = self._guard(identity, session, deadline)
+        if not _focus_ready(observed, window):
             self._command("-m", "window", "--focus", str(identity.window_id), deadline=deadline)
 
     def fullscreen(self, identity: WindowIdentity, session: SessionIdentity, desired: bool,
                    display_uuid: str, *, deadline: float | None = None) -> None:
         if type(desired) is not bool:
             raise ValueError("desired must be a boolean.")
-        _, window = self._guard(identity, session, deadline)
+        observed, window = self._guard(identity, session, deadline)
         if window.display_uuid != display_uuid:
             raise YabaiError(YabaiFailure.WINDOW_STATE_CHANGED, "Window monitor changed before fullscreen transition.")
         if window.fullscreen == desired:
             return
-        if not window.focused:
-            raise YabaiError(YabaiFailure.WINDOW_STATE_CHANGED, "Window focus changed before fullscreen transition.")
+        if not _focus_ready(observed, window):
+            raise YabaiError(YabaiFailure.FOCUS_CHANGED, "Window or Space focus changed before fullscreen transition.")
         self._command("-m", "window", str(identity.window_id), "--toggle", "native-fullscreen", deadline=deadline)
 
     def move_to_display(self, identity: WindowIdentity, session: SessionIdentity, display_uuid: str,
@@ -220,6 +221,11 @@ class Yabai:
         if window.fullscreen:
             raise YabaiError(YabaiFailure.WINDOW_STATE_CHANGED, "Window entered fullscreen before its move.")
         self._command("-m", "window", str(identity.window_id), "--space", str(destination.index), deadline=deadline)
+
+
+def _focus_ready(observed: Snapshot, window: Window) -> bool:
+    return window.focused and any(s.id == window.space_id and s.display_uuid == window.display_uuid and
+                                 s.visible and s.focused for s in observed.spaces)
 
 
 def _signature(raw: dict[str, list[dict]]) -> str:

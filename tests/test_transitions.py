@@ -94,6 +94,67 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(result.attempted_operations, ("focus",))
         self.assertFalse(any("--toggle" in command for command in desktop.commands))
 
+    def test_waits_for_space_activation_even_when_window_reports_focus(self):
+        desktop = FakeYabai(window(focused=True))
+        engine = self.engine(desktop)
+        original_observe = engine.desktop.observe
+        original_runner = engine.desktop.runner
+        toggled = []
+        def delayed_space(**options):
+            snapshot = original_observe(**options)
+            if engine.clock() < 0.3:
+                return replace(snapshot, spaces=tuple(replace(s, visible=False, focused=False, visible_window_id=None)
+                                                      for s in snapshot.spaces))
+            return snapshot
+        def record_toggle(argv, **options):
+            if '--toggle' in argv:
+                toggled.append(engine.clock())
+            return original_runner(argv, **options)
+        engine.desktop.observe = delayed_space
+        engine.desktop.runner = record_toggle
+        result = engine.apply(self.target(), SESSION)
+        self.assertEqual(result.status, Status.VERIFIED)
+        self.assertTrue(toggled and min(toggled) >= 0.3)
+
+    def test_retries_focus_if_final_guard_refuses_before_sending_toggle(self):
+        desktop = FakeYabai(window())
+        engine = self.engine(desktop)
+        original = engine.desktop.fullscreen
+        calls = []
+        def lose_focus_once(identity, session, desired, display_uuid, **options):
+            if not calls:
+                desktop.windows[1] = replace(desktop.windows[1], focused=False)
+            calls.append(True)
+            return original(identity, session, desired, display_uuid, **options)
+        engine.desktop.fullscreen = lose_focus_once
+        result = engine.apply(self.target(), SESSION)
+        self.assertEqual(result.status, Status.VERIFIED)
+        self.assertEqual(sum('--toggle' in command for command in desktop.commands), 1)
+        self.assertEqual(sum('--focus' in command for command in desktop.commands), 2)
+
+    def test_focus_guard_retry_is_bounded_and_never_retries_a_sent_toggle(self):
+        desktop = FakeYabai(window())
+        engine = self.engine(desktop)
+        calls = []
+        def refuse(*args, **options):
+            calls.append(True)
+            raise YabaiError(YabaiFailure.FOCUS_CHANGED, 'Synthetic focus loss before toggle.')
+        engine.desktop.fullscreen = refuse
+        result = engine.apply(self.target(), SESSION)
+        self.assertEqual((result.status, result.reason), (Status.FAILED, 'focus_changed'))
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(any('--toggle' in command for command in desktop.commands))
+
+    def test_fullscreen_exit_can_return_to_target_monitor_without_an_extra_move(self):
+        desktop = FakeYabai(window(fullscreen=True, display=B))
+        def return_to_normal_desktop(operation):
+            if operation == 'toggle' and not desktop.windows[1].fullscreen:
+                desktop.windows[1] = replace(desktop.windows[1], display_uuid=A, space_id=101)
+        desktop.after_command = return_to_normal_desktop
+        result = self.engine(desktop).apply(self.target(), SESSION)
+        self.assertEqual(result.status, Status.VERIFIED)
+        self.assertFalse(any('--space' in command for command in desktop.commands))
+
     def test_wrong_monitor_after_fullscreen_entry_is_not_reported_verified(self):
         desktop = FakeYabai(window())
         def wrong_monitor(operation):

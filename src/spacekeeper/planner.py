@@ -105,6 +105,9 @@ def plan_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
     decisions = []
 
     for wanted in sorted(saved.windows, key=lambda w: w.id):
+        if _unsupported(wanted) == Reason.PROTECTED_WINDOW:
+            decisions.append(WindowDecision(wanted.id, DecisionStatus.UNSUPPORTED, Reason.PROTECTED_WINDOW))
+            continue
         actual = live_windows.get(wanted.id)
         if actual is None:
             decisions.append(WindowDecision(wanted.id, DecisionStatus.SKIPPED, Reason.CLOSED))

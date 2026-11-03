@@ -33,7 +33,7 @@ def observe(*windows: Window, displays=DISPLAYS, normal_displays=(A, B), session
             spaces.setdefault(value.space_id, Space(value.space_id, 1, value.display_uuid, value.fullscreen, False))
     if visible_ids is None:
         by_display = {}
-        for value in windows:
+        for value in sorted(windows, key=lambda w: not w.focused):
             if not value.hidden and not value.minimized and value.space_id is not None:
                 by_display.setdefault(value.display_uuid, value.id)
         visible_ids = tuple(by_display.values())
