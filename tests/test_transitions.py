@@ -3,6 +3,7 @@ import json
 import unittest
 
 from spacekeeper.planner import WindowTarget, plan_restore
+from spacekeeper.process import ProcessResult
 from spacekeeper.snapshot import ProcessIdentity
 from spacekeeper.transitions import TransitionStatus as Status, WindowTransitions
 from spacekeeper.yabai import Yabai, YabaiError, YabaiFailure
@@ -240,6 +241,27 @@ class TransitionTests(unittest.TestCase):
         result = engine.apply(self.target(), SESSION)
         self.assertEqual(result.status, Status.VERIFIED)
         self.assertEqual(omitted, [True])
+
+    def test_fullscreen_transition_retries_lagging_space_membership_without_repeating_toggle(self):
+        desktop = FakeYabai(window())
+        engine = self.engine(desktop)
+        original = engine.desktop.runner
+        gaps = []
+        def lagging_membership(argv, **options):
+            result = original(argv, **options)
+            if (argv[1:4] == ('-m', 'query', '--spaces') and
+                    any('--toggle' in command for command in desktop.commands) and len(gaps) < 4):
+                gaps.append(True)
+                data = json.loads(result.stdout)
+                for space in data:
+                    space['windows'] = [wid for wid in space['windows'] if wid != 1]
+                return ProcessResult(0, json.dumps(data).encode(), b'')
+            return result
+        engine.desktop.runner = lagging_membership
+        result = engine.apply(self.target(), SESSION)
+        self.assertEqual(result.status, Status.VERIFIED)
+        self.assertEqual(len(gaps), 4)
+        self.assertEqual(sum('--toggle' in command for command in desktop.commands), 1)
 
     def test_owner_change_after_a_fullscreen_query_gap_is_still_skipped(self):
         desktop = FakeYabai(window())

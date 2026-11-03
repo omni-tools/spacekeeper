@@ -119,6 +119,8 @@ attempt log does not claim that the operation succeeded.
 Native fullscreen can temporarily omit a surviving window from yabai queries;
 polling tolerates that gap within its deadline and rechecks ownership when the
 window returns. A permanently missing or replaced window is still skipped.
+Target reads also retry the brief interval when fullscreen has exposed a window
+before its Space query includes that window's membership, without resending the toggle.
 The last confirmed transition result is reused when it already satisfies the
 window target; an identical verification loop is not repeated.
 

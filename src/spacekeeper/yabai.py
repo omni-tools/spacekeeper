@@ -221,6 +221,16 @@ class Yabai:
                 if type(space['windows']) is not list or any(type(wid) is not int for wid in space['windows']):
                     raise ValueError('Invalid membership.')
                 space['windows'] = [wid for wid in space['windows'] if wid == window_id]
+            window = raw['windows'][0]
+            if type(window.get('space')) is int and window['space'] > 0:
+                if any(type(space.get('index')) is not int for space in raw['spaces']):
+                    raise ValueError('Invalid Space index.')
+                space = next((s for s in raw['spaces'] if s['index'] == window['space']), None)
+                if space is None or window_id not in space['windows']:
+                    # Native fullscreen can expose the window before the Space
+                    # query includes its new membership. Poll without resending
+                    # the toggle; never normalize this gap into a stable sample.
+                    raise YabaiError(YabaiFailure.DESKTOP_CHANGED, 'Target Space membership is still changing.')
         except (KeyError, TypeError, ValueError) as error:
             raise YabaiError(YabaiFailure.INVALID_RESPONSE, 'Invalid yabai Space membership.') from error
         return raw

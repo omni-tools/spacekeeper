@@ -283,3 +283,34 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(YabaiError) as caught:
             adapter.observe_window(window().identity, SESSION)
         self.assertEqual(caught.exception.reason, Failure.INVALID_RESPONSE)
+
+    def test_unsettled_target_membership_retries_are_bounded_before_mutation(self):
+        desktop = FakeYabai(window())
+        def runner(argv, **options):
+            result = desktop(argv, **options)
+            if argv[3] == '--spaces':
+                data = json.loads(result.stdout)
+                for space in data:
+                    space['windows'] = []
+                return ProcessResult(0, json.dumps(data).encode(), b'')
+            return result
+        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop)
+        with self.assertRaises(YabaiError) as caught:
+            adapter.focus(window().identity, SESSION)
+        self.assertEqual(caught.exception.reason, Failure.DESKTOP_CHANGED)
+        self.assertEqual(desktop.query_counts['spaces'], 3)
+        self.assertEqual(desktop.commands, [])
+
+    def test_malformed_target_state_is_still_an_invalid_response(self):
+        desktop = FakeYabai(window())
+        def runner(argv, **options):
+            result = desktop(argv, **options)
+            if argv[3] == '--windows':
+                data = json.loads(result.stdout)
+                data['is-native-fullscreen'] = 'false'
+                return ProcessResult(0, json.dumps(data).encode(), b'')
+            return result
+        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop)
+        with self.assertRaises(YabaiError) as caught:
+            adapter.observe_window(window().identity, SESSION)
+        self.assertEqual(caught.exception.reason, Failure.INVALID_RESPONSE)
