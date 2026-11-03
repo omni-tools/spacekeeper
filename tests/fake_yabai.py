@@ -60,6 +60,8 @@ class FakeYabai:
         display_indexes = {d.uuid: d.index for d in snapshot.displays}
         spaces = [{"id": s.id, "uuid": s.uuid or "", "index": indexes[s.id],
                    "display": display_indexes[s.display_uuid], "windows": list(s.window_ids),
+                   "first-window": s.window_ids[0] if s.window_ids else 0,
+                   "last-window": s.window_ids[-1] if s.window_ids else 0,
                    "is-native-fullscreen": s.fullscreen, "is-visible": s.visible, "has-focus": s.focused}
                   for s in snapshot.spaces]
         windows = [{"id": w.id, "pid": w.pid, "app": w.app, "title": w.title,
@@ -84,7 +86,7 @@ class FakeYabai:
                     window_id = int(args[args.index('--window') + 1])
                     data = next((item for item in data if item['id'] == window_id), None)
                     if data is None:
-                        return ProcessResult(1, b'', b'could not retrieve window details.')
+                        return ProcessResult(1, b'', b'could not locate window with the specified id.')
                 if len(args) > 3 and not args[3].startswith('--'):
                     properties = args[3].split(',')
                     def project(item):

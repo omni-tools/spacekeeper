@@ -97,11 +97,11 @@ class TransitionTests(unittest.TestCase):
     def test_waits_for_space_activation_even_when_window_reports_focus(self):
         desktop = FakeYabai(window(focused=True))
         engine = self.engine(desktop)
-        original_observe = engine.desktop.observe
+        original_observe = engine.desktop.observe_window
         original_runner = engine.desktop.runner
         toggled = []
-        def delayed_space(**options):
-            snapshot = original_observe(**options)
+        def delayed_space(*args, **options):
+            snapshot = original_observe(*args, **options)
             if engine.clock() < 0.3:
                 return replace(snapshot, spaces=tuple(replace(s, visible=False, focused=False, visible_window_id=None)
                                                       for s in snapshot.spaces))
@@ -110,7 +110,7 @@ class TransitionTests(unittest.TestCase):
             if '--toggle' in argv:
                 toggled.append(engine.clock())
             return original_runner(argv, **options)
-        engine.desktop.observe = delayed_space
+        engine.desktop.observe_window = delayed_space
         engine.desktop.runner = record_toggle
         result = engine.apply(self.target(), SESSION)
         self.assertEqual(result.status, Status.VERIFIED)
@@ -214,14 +214,14 @@ class TransitionTests(unittest.TestCase):
     def test_transient_desktop_churn_is_polled_until_it_settles(self):
         desktop = FakeYabai(window())
         engine = self.engine(desktop)
-        original = engine.desktop.observe
+        original = engine.desktop.observe_window
         failures = []
-        def observe_during_animation(**options):
+        def observe_during_animation(*args, **options):
             if desktop.commands and not failures:
                 failures.append(True)
                 raise YabaiError(YabaiFailure.DESKTOP_CHANGED, "Synthetic fullscreen animation.")
-            return original(**options)
-        engine.desktop.observe = observe_during_animation
+            return original(*args, **options)
+        engine.desktop.observe_window = observe_during_animation
         result = engine.apply(self.target(), SESSION)
         self.assertEqual(result.status, Status.VERIFIED)
         self.assertEqual(failures, [True])
@@ -229,14 +229,14 @@ class TransitionTests(unittest.TestCase):
     def test_fullscreen_transition_can_temporarily_omit_the_same_window(self):
         desktop = FakeYabai(window())
         engine = self.engine(desktop)
-        original = engine.desktop.observe
+        original = engine.desktop.observe_window
         omitted = []
-        def observe_during_fullscreen_animation(**options):
+        def observe_during_fullscreen_animation(*args, **options):
             if any('--toggle' in command for command in desktop.commands) and not omitted:
                 omitted.append(True)
-                return observe()
-            return original(**options)
-        engine.desktop.observe = observe_during_fullscreen_animation
+                raise YabaiError(YabaiFailure.WINDOW_MISSING, 'Synthetic fullscreen query gap.')
+            return original(*args, **options)
+        engine.desktop.observe_window = observe_during_fullscreen_animation
         result = engine.apply(self.target(), SESSION)
         self.assertEqual(result.status, Status.VERIFIED)
         self.assertEqual(omitted, [True])
@@ -244,15 +244,15 @@ class TransitionTests(unittest.TestCase):
     def test_owner_change_after_a_fullscreen_query_gap_is_still_skipped(self):
         desktop = FakeYabai(window())
         engine = self.engine(desktop)
-        original = engine.desktop.observe
+        original = engine.desktop.observe_window
         omitted = []
-        def observe_replaced_window(**options):
+        def observe_replaced_window(*args, **options):
             if any('--toggle' in command for command in desktop.commands) and not omitted:
                 omitted.append(True)
                 desktop.windows[1] = replace(desktop.windows[1], owner=ProcessIdentity(101, 2_000_000, 0))
-                return observe()
-            return original(**options)
-        engine.desktop.observe = observe_replaced_window
+                raise YabaiError(YabaiFailure.WINDOW_MISSING, 'Synthetic fullscreen query gap.')
+            return original(*args, **options)
+        engine.desktop.observe_window = observe_replaced_window
         result = engine.apply(self.target(), SESSION)
         self.assertEqual((result.status, result.reason), (Status.SKIPPED, 'owner_changed'))
         self.assertEqual(result.attempted_operations, ('focus', 'enter_fullscreen'))

@@ -1,6 +1,7 @@
 """Bounded yabai queries and guarded window operations; no storage or CLI IO."""
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 import json
@@ -21,6 +22,23 @@ from spacekeeper.snapshot import (
 # for every window repeats expensive WindowServer lookups on large desktops.
 WINDOW_PROPERTIES = ('id,pid,app,title,frame,role,subrole,root-window,has-focus,'
                      'is-native-fullscreen,is-minimized,is-hidden,is-sticky,can-move,can-resize')
+SPACE_PROPERTIES = 'id,uuid,index,display,windows,is-native-fullscreen,is-visible,has-focus'
+
+
+@dataclass(frozen=True)
+class WindowObservation:
+    """Fresh target and topology, with Space membership scoped to this window.
+
+    This is not a whole-desktop snapshot and must never be persisted as a backup.
+    """
+    session: SessionIdentity
+    window: Window
+    displays: tuple[Display, ...]
+    spaces: tuple[Space, ...]
+
+    @property
+    def focus_ready(self) -> bool:
+        return _focus_ready(self, self.window)
 
 
 class YabaiFailure(StrEnum):
@@ -100,7 +118,8 @@ class Yabai:
         if result.returncode != 0:
             diagnostic = result.stderr.decode("utf-8", errors="replace").lower()
             if ("--window" in args and "query" in args and
-                    "could not retrieve window details" in diagnostic):
+                    ("could not retrieve window details" in diagnostic or
+                     "could not locate window with the specified id" in diagnostic)):
                 reason = YabaiFailure.WINDOW_MISSING
             elif "scripting-addition" in diagnostic or "scripting addition" in diagnostic:
                 reason = YabaiFailure.CAPABILITY_UNAVAILABLE
@@ -186,19 +205,40 @@ class Yabai:
                     issues[str(pid)] = error.reason.value
         return owners, issues
 
-    def observe(self, *, deadline: float | None = None) -> Snapshot:
-        """Read a coherent observation, retrying topology/state/owner changes.
+    def _window_queries(self, window_id: int, deadline: float | None) -> dict[str, list[dict]]:
+        domains = ('displays', 'spaces', 'windows')
+        properties = {'displays': 'id,uuid,index,frame', 'spaces': SPACE_PROPERTIES,
+                      'windows': WINDOW_PROPERTIES + ',display,space'}
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            raw = dict(zip(domains, pool.map(
+                lambda domain: self.query(domain, properties=properties[domain],
+                                          window_id=window_id if domain == 'windows' else None,
+                                          deadline=deadline), domains)))
+        try:
+            # Other windows are irrelevant to a target guard. Full observations
+            # at backup/final verification still validate the entire desktop.
+            for space in raw['spaces']:
+                if type(space['windows']) is not list or any(type(wid) is not int for wid in space['windows']):
+                    raise ValueError('Invalid membership.')
+                space['windows'] = [wid for wid in space['windows'] if wid == window_id]
+        except (KeyError, TypeError, ValueError) as error:
+            raise YabaiError(YabaiFailure.INVALID_RESPONSE, 'Invalid yabai Space membership.') from error
+        return raw
+
+    def _read(self, deadline: float | None, window_id: int | None = None) -> Snapshot:
+        """Read two coherent passes, retrying topology/state/owner changes.
 
         Titles may change during a read; they are metadata, not identity. Raw
         queries are retained in memory only. This is not a macOS transaction.
         """
+        read = self._queries if window_id is None else lambda deadline: self._window_queries(window_id, deadline)
         for _ in range(self.capture_attempts):
             started = datetime.now().astimezone().isoformat()
             session = self.identities.session()
             try:
-                before = self._queries(deadline)
+                before = read(deadline)
                 owners_before, _ = self._owners(before["windows"])
-                after = self._queries(deadline)
+                after = read(deadline)
             except YabaiError as error:
                 if error.reason == YabaiFailure.DESKTOP_CHANGED:
                     continue
@@ -214,9 +254,14 @@ class Yabai:
                 raise YabaiError(YabaiFailure.INVALID_RESPONSE, "yabai returned an inconsistent observation.") from error
         raise YabaiError(YabaiFailure.DESKTOP_CHANGED, "Desktop or ownership changed during observation; retry later.")
 
-    def _guard(self, identity: WindowIdentity, session: SessionIdentity,
-               deadline: float | None) -> tuple[Snapshot, Window]:
-        observed = self.observe(deadline=deadline)
+    def observe(self, *, deadline: float | None = None) -> Snapshot:
+        """Observe every window for capture, backup, planning, and final verification."""
+        return self._read(deadline)
+
+    def observe_window(self, identity: WindowIdentity, session: SessionIdentity,
+                       *, deadline: float | None = None) -> WindowObservation:
+        """Observe and guard only this owner/window against fresh global topology."""
+        observed = self._read(deadline, identity.window_id)
         if observed.session != session:
             raise YabaiError(YabaiFailure.SESSION_CHANGED, "The graphical session has changed.")
         window = next((w for w in observed.windows if w.id == identity.window_id), None)
@@ -230,7 +275,12 @@ class Yabai:
                 (window.role, window.subrole) != ("AXWindow", "AXStandardWindow") or
                 window.display_uuid is None or window.space_id is None):
             raise YabaiError(YabaiFailure.UNSUPPORTED_WINDOW, "The window is not a supported restore target.")
-        return observed, window
+        return WindowObservation(observed.session, window, observed.displays, observed.spaces)
+
+    def _guard(self, identity: WindowIdentity, session: SessionIdentity,
+               deadline: float | None) -> tuple[WindowObservation, Window]:
+        observed = self.observe_window(identity, session, deadline=deadline)
+        return observed, observed.window
 
     def focus(self, identity: WindowIdentity, session: SessionIdentity, *, deadline: float | None = None) -> None:
         observed, window = self._guard(identity, session, deadline)
@@ -275,7 +325,7 @@ class Yabai:
         self._command("-m", "window", str(identity.window_id), "--space", str(destination.index), deadline=deadline)
 
 
-def _focus_ready(observed: Snapshot, window: Window) -> bool:
+def _focus_ready(observed: Snapshot | WindowObservation, window: Window) -> bool:
     return window.focused and any(s.id == window.space_id and s.display_uuid == window.display_uuid and
                                  s.visible and s.focused for s in observed.spaces)
 

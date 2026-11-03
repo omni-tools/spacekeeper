@@ -98,7 +98,12 @@ require an explicit overwrite. Listing and loading do not create storage.
 `process.py` runs shell-free argument arrays with command deadlines and a combined
 stdout/stderr limit. `yabai.py` uses that injectable runner for parallel read-only
 queries, retries changing observations, and rechecks session/window ownership
-before window operations. A move selects a normal Space by stable ID, then
+before window operations. Full observations derive window placement from Space
+membership, with individual placement queries for ambiguous or unplaced windows.
+Intermediate restore checks read only the affected window plus fresh monitor/Space
+topology, with fresh session and owner identities around both query passes. They
+never substitute for the full backup or final desktop verification.
+A move selects a normal Space by stable ID, then
 resolves its current index immediately before the command. Capability failures
 are reported without attempting scripting-addition setup.
 
@@ -114,11 +119,17 @@ attempt log does not claim that the operation succeeded.
 Native fullscreen can temporarily omit a surviving window from yabai queries;
 polling tolerates that gap within its deadline and rechecks ownership when the
 window returns. A permanently missing or replaced window is still skipped.
+The last confirmed transition result is reused when it already satisfies the
+window target; an identical verification loop is not repeated.
 
 `restore.py` holds a per-user restore lock across state directories and verifies
 its fresh backup before invoking window transitions. It restores visible windows
 and final focus last, verifies the whole result, and writes a private report beside
 the backup collection. A single matching observation is insufficient for success.
+If the initial observation already matches every target, visible window, and
+focus, restore skips intermediate focus work and still requires two full final
+observations. Otherwise, it focuses the final active window last and reuses that
+confirmed focus instead of repeating the same operation.
 Expected system-window exclusions are reported separately from unsupported,
 skipped, blocked, and failed targets. The Click commands use this coordinator.
 
@@ -138,8 +149,8 @@ These inspect the current process and a temporary child, without printing identi
 values. They require access to the boot identifier and a graphical login session.
 They do not verify fullscreen or monitor restoration.
 
-The optional adapter check performs a read-only observation through the running
-yabai service and validates its in-memory serialization:
+The optional adapter checks perform full and target-only read-only observations
+through the running yabai service, including full snapshot serialization:
 
 ```sh
 uv run python -m unittest tests.live_yabai -v
@@ -154,7 +165,8 @@ that existing fullscreen/monitor states, visible windows, and final focus were
 restored. This covers the internal engine with that app, rather than the future
 whole-session restore CLI.
 
-The completed v0 CLI has subsequently passed a quiet native smoke test: a
+Before these observation optimizations, the completed v0 CLI passed a quiet
+native smoke test: a
 disposable TextEdit window entered fullscreen and moved to another monitor, then
 CLI restore applied the extra-fullscreen exit policy and verified the complete
 saved result. It exited 0 with no report issues; existing window states, visible
@@ -170,6 +182,14 @@ ID with a different owner is skipped, including by the extra-fullscreen policy.
 Sticky, system, overlay, hidden, and minimized windows are currently unsupported.
 Window ID reuse within the same surviving process and WindowServer restarts
 within a login session are not independently detected by these identity tokens.
+
+Read-only measurements on one desktop with 65 windows compared the original
+implementation with these optimizations: median capture CLI time was 709 ms
+versus 416 ms (five runs each), and an individual pre-operation guard was 564 ms
+versus 232 ms (seven runs each). These are local component measurements, not
+end-to-end native restore timings. Synthetic query-budget tests also require
+full-desktop observations only for the backup and two final verification reads
+on settled restore paths; intermediate reads remain limited to their target.
 
 ## Continuous integration
 

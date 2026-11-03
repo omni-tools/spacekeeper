@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from spacekeeper.restore import RestoreCoordinator, RestoreError, restore_lock
 from spacekeeper.storage import SnapshotStore, StorageError, StorageFailure
-from spacekeeper.yabai import Yabai
+from spacekeeper.yabai import Yabai, YabaiError, YabaiFailure
 from tests.fake_yabai import Clock, FakeYabai
 from tests.support import A, B, SESSION, observe, window
 
@@ -108,6 +108,40 @@ class RestoreTests(unittest.TestCase):
         report = self.coordinator(desktop).restore(observe(window(focused=True)))
         self.assertFalse(report.complete)
         self.assertTrue(any(i.scope in ('focus', 'visibility') for i in report.issues))
+
+    def test_matching_shortcut_still_detects_new_fullscreen_windows_in_final_verification(self):
+        desktop = FakeYabai(window(focused=True))
+        def new_window(domain, count):
+            if domain == 'windows' and count == 3:
+                desktop.windows[99] = window(99, fullscreen=True, display=B)
+        desktop.on_query = new_window
+        report = self.coordinator(desktop).restore(observe(window(focused=True)))
+        self.assertFalse(report.complete)
+        self.assertTrue(any(i.reason == 'new_fullscreen_window' for i in report.issues))
+        self.assertEqual(desktop.commands, [])
+
+    def test_last_visible_window_focus_is_not_repeated(self):
+        desktop = FakeYabai(window())
+        coordinator = self.coordinator(desktop)
+        with patch.object(coordinator, '_focus', wraps=coordinator._focus) as focus:
+            report = coordinator.restore(observe(window(focused=True)))
+        self.assertTrue(report.complete, report)
+        self.assertEqual(focus.call_count, 1)
+
+    def test_focus_verification_tolerates_a_temporary_target_query_gap(self):
+        desktop = FakeYabai(window())
+        coordinator = self.coordinator(desktop)
+        original = coordinator.desktop.observe_window
+        gaps = []
+        def gap(*args, **options):
+            if desktop.commands and not gaps:
+                gaps.append(True)
+                raise YabaiError(YabaiFailure.WINDOW_MISSING, 'Synthetic focus animation.')
+            return original(*args, **options)
+        coordinator.desktop.observe_window = gap
+        report = coordinator.restore(observe(window(focused=True)))
+        self.assertTrue(report.complete, report)
+        self.assertEqual(gaps, [True])
 
     def test_closed_saved_window_is_incomplete_but_protected_windows_are_excluded(self):
         report = self.coordinator(FakeYabai()).restore(observe(window(), visible_ids=()))

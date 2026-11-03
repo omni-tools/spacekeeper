@@ -19,3 +19,16 @@ class LiveYabaiTests(unittest.TestCase):
         self.assertTrue(len(observation.spaces) > 0, "No Spaces were observed.")
         self.assertTrue(Snapshot.from_json(observation.to_json()) == observation,
                         "Observation did not survive serialization.")
+
+    def test_read_only_target_observation(self):
+        desktop = Yabai()
+        snapshot = desktop.observe()
+        target = next((w for w in snapshot.windows if w.identity is not None and w.root_window and
+                       (w.role, w.subrole) == ('AXWindow', 'AXStandardWindow') and
+                       not (w.hidden or w.minimized or w.sticky)), None)
+        if target is None:
+            self.skipTest('No supported window is available for read-only target queries.')
+        observed = desktop.observe_window(target.identity, snapshot.session)
+        self.assertEqual(observed.window.identity, target.identity, 'Target ownership changed during observation.')
+        self.assertIn(observed.window.display_uuid, {d.uuid for d in observed.displays},
+                      'Target monitor was not resolved.')

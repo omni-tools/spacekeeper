@@ -212,14 +212,14 @@ class AdapterTests(unittest.TestCase):
     def test_focus_window_flag_does_not_override_inactive_space(self):
         desktop = FakeYabai(window(focused=True))
         adapter = self.adapter(desktop)
-        original = adapter.observe
-        def inactive_space(**options):
-            snapshot = original(**options)
+        original = adapter.observe_window
+        def inactive_space(*args, **options):
+            snapshot = original(*args, **options)
             if not desktop.commands:
                 return replace(snapshot, spaces=tuple(replace(s, visible=False, focused=False, visible_window_id=None)
                                                       for s in snapshot.spaces))
             return snapshot
-        adapter.observe = inactive_space
+        adapter.observe_window = inactive_space
         adapter.focus(window().identity, SESSION)
         self.assertEqual(desktop.commands, [('-m', 'window', '--focus', '1')])
 
@@ -227,3 +227,59 @@ class AdapterTests(unittest.TestCase):
         for executable in ("yabai", "./yabai", "/synthetic/\0yabai"):
             with self.subTest(executable=executable), self.assertRaises(ValueError):
                 resolve_yabai(executable)
+
+    def test_target_observation_checks_only_target_owners_and_ignores_unrelated_membership_churn(self):
+        desktop = FakeYabai(window(focused=True), window(2))
+        owners = []
+        desktop.on_process = owners.append
+        def unrelated_window(domain, count):
+            if domain == 'spaces':
+                desktop.windows[2 + count] = window(2 + count)
+        desktop.on_query = unrelated_window
+        actual = self.adapter(desktop).observe_window(window().identity, SESSION)
+        self.assertEqual(actual.window.identity, window().identity)
+        self.assertTrue(actual.focus_ready)
+        self.assertEqual(owners, [101, 101])
+        self.assertTrue(all('--window' in args for args in desktop.queries if args[2] == '--windows'))
+
+    def test_target_owner_change_between_passes_cannot_authorize_a_mutation(self):
+        desktop = FakeYabai(window())
+        reads = []
+        def replacement(pid):
+            reads.append(pid)
+            if len(reads) == 2:
+                desktop.windows[1] = replace(desktop.windows[1], owner=ProcessIdentity(pid, 2_000_000, 0))
+        desktop.on_process = replacement
+        with self.assertRaises(YabaiError) as caught:
+            self.adapter(desktop).focus(window().identity, SESSION)
+        self.assertEqual(caught.exception.reason, Failure.OWNER_CHANGED)
+        self.assertEqual(desktop.commands, [])
+
+    def test_target_query_checks_id_and_rejects_malformed_objects(self):
+        for response in (b'[]', b'{}', b'{"id":2}', b'{"id":1,"id":1}', b'null'):
+            adapter = Yabai(executable='/synthetic/yabai', identities=FakeYabai(),
+                            runner=lambda *args, **kwargs: ProcessResult(0, response, b''))
+            with self.subTest(response=response), self.assertRaises(YabaiError) as caught:
+                adapter.query('windows', window_id=1)
+            self.assertEqual(caught.exception.reason, Failure.INVALID_RESPONSE)
+
+    def test_missing_target_query_maps_native_error_without_exposing_diagnostics(self):
+        desktop = FakeYabai()
+        with self.assertRaises(YabaiError) as caught:
+            self.adapter(desktop).observe_window(window().identity, SESSION)
+        self.assertEqual(caught.exception.reason, Failure.WINDOW_MISSING)
+        self.assertEqual(desktop.commands, [])
+
+    def test_target_observation_rejects_invalid_membership_before_filtering_it(self):
+        desktop = FakeYabai(window())
+        def runner(argv, **options):
+            result = desktop(argv, **options)
+            if argv[3] == '--spaces':
+                data = json.loads(result.stdout)
+                data[0]['windows'] = 'bad membership'
+                return ProcessResult(0, json.dumps(data).encode(), b'')
+            return result
+        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop)
+        with self.assertRaises(YabaiError) as caught:
+            adapter.observe_window(window().identity, SESSION)
+        self.assertEqual(caught.exception.reason, Failure.INVALID_RESPONSE)

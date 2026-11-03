@@ -39,6 +39,8 @@ Restore the saved visible window on each available monitor and final focus last 
 
 Keep focus/fullscreen changes and Space-related operations sequential: global focus and changing Space indexes make concurrent mutations unsafe. Parallelize read-only snapshot queries. Independent frame moves/resizes can use up to four workers in a future frame-restoration feature, with per-window command order preserved. Current prototypes demonstrate this; no speedup has been measured.
 
+Full observations are required for capture, the pre-restore backup, planning, and final verification. During edits, query only the affected window and fresh display/Space topology. Keep coherent double reads, fresh session/process ownership, focus checks before fullscreen toggles, stable transition polling, and destination index resolution immediately before a move. Reuse a just-confirmed transition or focus result when no intervening operation invalidated it. An already-matching plan can skip intermediate focus work, but success still requires two full final observations. No observation is cached across restore invocations.
+
 Default runtime storage:
 
 - Snapshots/backups: `~/.local/state/spacekeeper`.

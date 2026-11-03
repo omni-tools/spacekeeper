@@ -118,13 +118,15 @@ class RestoreCoordinator:
         self.desktop.focus(identity, session, deadline=deadline)
         consecutive = 0
         while self.clock() < deadline:
-            snapshot = self._observe(deadline)
-            if snapshot.session != session:
-                raise YabaiError(YabaiFailure.SESSION_CHANGED, "Session changed while restoring focus.")
-            window = next((w for w in snapshot.windows if w.id == identity.window_id), None)
-            if window is not None and window.identity != identity:
-                raise YabaiError(YabaiFailure.OWNER_CHANGED, "Owner changed while restoring focus.")
-            consecutive = consecutive + 1 if self._focus_matches(snapshot, identity, display_uuid) else 0
+            try:
+                observed = self.desktop.observe_window(identity, session, deadline=deadline)
+                matches = observed.focus_ready and (
+                    display_uuid is None or observed.window.display_uuid == display_uuid)
+                consecutive = consecutive + 1 if matches else 0
+            except YabaiError as error:
+                if error.reason not in (YabaiFailure.DESKTOP_CHANGED, YabaiFailure.WINDOW_MISSING):
+                    raise
+                consecutive = 0
             if consecutive == 2 and self.clock() < deadline:
                 return
             self.sleep(min(self.interval, max(0, deadline - self.clock())))
@@ -162,19 +164,28 @@ class RestoreCoordinator:
                                                       decision.monitor_fallback))
 
                 eligible = {outcome.window_id for outcome in outcomes if outcome.status in ("restored", "unchanged")}
-                if not session_changed:
-                    for target in plan.visible:
+                already_matches = (not any(d.status == DecisionStatus.PLANNED for d in plan.windows) and
+                                   not self._verify(plan, before, before))
+                if not session_changed and not already_matches:
+                    # Make the final focused window the last visibility operation
+                    # when possible, then reuse its just-confirmed focus result.
+                    visible = sorted(plan.visible, key=lambda target: target.identity == plan.focus)
+                    last_focused = None
+                    for target in visible:
                         if target.identity.window_id not in eligible:
                             continue
                         try:
                             self._focus(target.identity, saved.session, target.display_uuid)
+                            last_focused = target.identity
                         except (YabaiError, IdentityUnavailable) as error:
+                            last_focused = None
                             issues.append(RestoreIssue("visibility", _reason(error), target.identity.window_id,
                                                        target.display_uuid))
                             if isinstance(error, YabaiError) and error.reason == YabaiFailure.SESSION_CHANGED:
                                 session_changed = True
                                 break
-                    if not session_changed and plan.focus is not None and plan.focus.window_id in eligible:
+                    if (not session_changed and plan.focus is not None and plan.focus.window_id in eligible and
+                            last_focused != plan.focus):
                         try:
                             self._focus(plan.focus, saved.session, None)
                         except (YabaiError, IdentityUnavailable) as error:
