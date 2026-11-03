@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import stat
 
+from spacekeeper.matching import WindowRule, window_rules
+
 
 class ConfigError(ValueError):
     pass
@@ -17,6 +19,7 @@ class Settings:
     config_dir: Path
     yabai: Path | None
     timeout: float
+    preserve: tuple[WindowRule, ...] = ()
 
     @classmethod
     def load(cls, *, state_dir=None, config_dir=None, yabai=None, timeout=None):
@@ -38,8 +41,12 @@ class Settings:
             data = {}
         except (OSError, ValueError, UnicodeDecodeError) as error:
             raise ConfigError('Cannot read a valid config.json in the configuration directory.') from error
-        if type(data) is not dict or data.keys() - {'state_dir', 'yabai', 'timeout'}:
-            raise ConfigError('Configuration accepts only state_dir, yabai, and timeout.')
+        if type(data) is not dict or data.keys() - {'state_dir', 'yabai', 'timeout', 'preserve'}:
+            raise ConfigError('Configuration accepts only state_dir, yabai, timeout, and preserve.')
+        try:
+            preserve = window_rules(data.get('preserve', []))
+        except ValueError as error:
+            raise ConfigError(str(error)) from error
         for key in ('state_dir', 'yabai'):
             if key in data and (type(data[key]) is not str or not data[key].strip() or '\0' in data[key]):
                 raise ConfigError(f'Configuration {key} must be a nonempty path string.')
@@ -53,4 +60,4 @@ class Settings:
         seconds = timeout if timeout is not None else data.get('timeout', 12)
         if type(seconds) not in (int, float) or not 0.1 <= seconds <= 300 or not math.isfinite(seconds):
             raise ConfigError('Timeout must be a finite number between 0.1 and 300 seconds.')
-        return cls(state, directory, binary, float(seconds))
+        return cls(state, directory, binary, float(seconds), preserve)

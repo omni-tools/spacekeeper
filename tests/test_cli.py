@@ -16,6 +16,26 @@ from tests.support import A, B, SESSION, observe, window
 
 
 class CliTests(unittest.TestCase):
+    def test_preserve_cli_rules_and_configuration_can_be_disabled(self):
+        self.invoke('capture')
+        self.device.windows[2] = window(2, fullscreen=True, display=B, title='Meeting')
+        result = self.invoke('restore', '--preserve', 'synthetic*', '*meeting*')
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertTrue(self.device.windows[2].fullscreen)
+        self.config.mkdir()
+        (self.config/'config.json').write_text(json.dumps({'preserve': [{'app': '*'}]}))
+        self.assertEqual(self.invoke('restore').exit_code, 0)
+        self.assertTrue(self.device.windows[2].fullscreen)
+        result = self.invoke('restore', '--no-preserve')
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertFalse(self.device.windows[2].fullscreen)
+
+    def test_invalid_preserve_options_never_access_the_desktop(self):
+        with patch('spacekeeper.cli.Yabai', side_effect=AssertionError('Unexpected native access')):
+            for args in (('restore', '--preserve', '', '*'),
+                         ('restore', '--preserve', '*', '*', '--no-preserve')):
+                self.assertEqual(self.invoke(*args).exit_code, 2)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

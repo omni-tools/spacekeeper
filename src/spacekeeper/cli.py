@@ -8,6 +8,7 @@ import click
 
 from spacekeeper.config import ConfigError, Settings
 from spacekeeper.identity import IdentityUnavailable
+from spacekeeper.matching import WindowRule
 from spacekeeper.restore import RestoreCoordinator, RestoreError
 from spacekeeper.storage import SnapshotStore, StorageError, validate_name
 from spacekeeper.yabai import Yabai, YabaiError
@@ -91,8 +92,11 @@ def list_snapshots(ctx: click.Context) -> None:
 @main.command()
 @click.argument('name', required=False, type=NAME)
 @click.option('--backup', 'backup_id', type=NAME, help='Restore a pre-restore backup by its filename ID.')
+@click.option('--preserve', 'preserve_rules', type=(str, str), multiple=True, metavar='APP_GLOB TITLE_GLOB',
+              help='Keep matching extra fullscreen windows untouched; repeat for more rules. Use * for any title.')
+@click.option('--no-preserve', is_flag=True, help='Ignore configured preserve rules for this restore.')
 @click.pass_context
-def restore(ctx: click.Context, name: str | None, backup_id: str | None) -> None:
+def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserve_rules, no_preserve: bool) -> None:
     """Restore NAME (default: default) in the same running session.
 
     Extra fullscreen windows absent from the snapshot exit fullscreen.
@@ -101,14 +105,22 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None) -> None
     """
     if backup_id is not None and name is not None:
         raise click.UsageError('Choose a snapshot name or --backup, not both.')
+    if no_preserve and preserve_rules:
+        raise click.UsageError('Choose --preserve or --no-preserve, not both.')
+    try:
+        preserve = () if no_preserve else ctx.obj.preserve + tuple(WindowRule(*rule) for rule in preserve_rules)
+    except ValueError as error:
+        raise click.BadParameter(str(error), param_hint='--preserve') from error
     settings = ctx.obj
     with operational_errors():
         store = SnapshotStore(settings.state_dir)
         saved = store.load_backup(backup_id) if backup_id is not None else store.load(name or 'default')
-        click.echo('Extra fullscreen windows absent from this snapshot will exit fullscreen.')
+        click.echo('Unmatched extra fullscreen windows absent from this snapshot will exit fullscreen.')
+        if preserve:
+            click.echo(f'Preserve filters: {len(preserve)} rule(s).')
         coordinator = RestoreCoordinator(desktop(settings), store, timeout=settings.timeout,
                                          on_backup=lambda path: click.echo(f'Pre-restore backup: {path}'))
-        report = coordinator.restore(saved)
+        report = coordinator.restore(saved, preserve=preserve)
         counts = Counter(window.status for window in report.windows)
         summary = ', '.join(f'{count} {status}' for status, count in sorted(counts.items())) or 'no windows'
         click.echo(('Restore complete: ' if report.complete else 'Restore incomplete: ') + summary)

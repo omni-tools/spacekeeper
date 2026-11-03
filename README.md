@@ -4,7 +4,7 @@ Capture and restore macOS fullscreen window arrangements through yabai.
 
 **Status: v0 capture/list/restore CLI implemented, with synthetic end-to-end tests and a scoped native CLI restore check.**
 
-Save named snapshots of the running macOS session and restore fullscreen states and original monitors. YAML presets, flexible app/title matching, preserve filters, reopening missing windows, and scripting-addition-assisted Space ordering are planned for later versions.
+Save named snapshots of the running macOS session and restore fullscreen states and original monitors. Preserve filters can keep selected extra fullscreen windows untouched. YAML presets, flexible app/title matching, reopening missing windows, and scripting-addition-assisted Space ordering are planned for later versions.
 
 ## Start here
 
@@ -58,9 +58,28 @@ uv run spacekeeper --state-dir /path/to/state capture work
 
 Global options precede the command. `--config-dir` selects the optional
 `config.json` directory (default `~/.config/spacekeeper`). Its accepted fields
-are `state_dir`, `yabai` (executable path), and `timeout` (seconds, default 12).
+are `state_dir`, `yabai` (executable path), `timeout` (seconds, default 12), and
+`preserve` (app/title rules).
 Relative paths in this file resolve against its directory. Neither listing nor
 configuration loading creates missing directories.
+
+Preserve filters match app and title globs case-insensitively. Both patterns in a
+rule must match; any matching rule preserves an extra fullscreen window. Saved
+windows still follow the snapshot. Configure default rules in `config.json` or
+add rules for one restore:
+
+```sh
+spacekeeper restore work --preserve 'Browser*' '*meeting*'
+spacekeeper restore work --preserve 'Video Call' '*'
+spacekeeper restore work --no-preserve  # Ignore configured rules.
+```
+
+```json
+{"preserve": [{"app": "Browser*", "title": "*meeting*"}, {"app": "Video Call"}]}
+```
+
+CLI rules add to configured rules. `--no-preserve` cannot be combined with
+`--preserve`. Preserved windows are reported as excluded and verified unchanged.
 
 ```json
 {"timeout": 20}

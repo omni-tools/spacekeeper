@@ -20,7 +20,7 @@ Snapshots target surviving windows in the **same running macOS session**. Match 
 
 For windows represented by the snapshot, restore native fullscreen on/off and their saved monitor when connected. Match monitors by UUID rather than current arrangement index. If a saved monitor is disconnected, keep the window on its current monitor and restore fullscreen state there; report the fallback.
 
-**Extra windows absent from the snapshot exit fullscreen in v0.** They stay open. Extra ordinary windows remain unchanged. Do not treat sticky/system/overlay windows as restore targets. Preserve filters are deferred, so v0 must clearly document this fullscreen-exit policy.
+**Extra windows absent from the snapshot exit fullscreen by default.** They stay open. Extra ordinary windows remain unchanged. Do not treat sticky/system/overlay windows as restore targets. Optional preserve filters, added after v0, exclude matching extra fullscreen windows from this policy. Saved windows always follow their snapshot targets.
 
 Use the verified monitor-first sequence for a fullscreen window on the wrong monitor:
 
@@ -62,7 +62,7 @@ Reuse behavior from the prototypes; replace their top-level script structure and
 
 ## Later versions
 
-1. **Preserve filters:** extra fullscreen windows matching app/title patterns stay untouched; other extra fullscreen windows exit fullscreen. The exact rule syntax is still to design.
+1. **Preserve filters (implemented):** case-insensitive app/title globs leave matching extra fullscreen windows untouched. A rule requires app and optionally title (default `*`); its fields match together and rules combine with OR. `restore --preserve APP_GLOB TITLE_GLOB` adds to `config.json`'s `preserve` list. `--no-preserve` disables configured rules. Final verification checks preserved ownership, fullscreen, monitor, Space, and frame.
 2. **YAML presets:** minimal rules contain app name and device; optional title matching narrows a rule. Apply a rule to all matching windows. Support flexible/fuzzy names and capture the current arrangement into a preset. Define device aliases and ambiguous fuzzy-match behavior before implementation; the interview did not settle them. Avoid silently choosing an unrelated app/device.
 3. **SA-assisted positioning:** restore exact Space monitor placement/order when scripting addition capabilities are available. See the [SA handoff](draft/HANDOFF.yabai-sa-and-space-reordering.md). Normal frame restore can be supported separately where Accessibility allows it; it does not intrinsically require SA.
 4. **Respawning:** optionally launch missing apps/windows; define app-specific restoration capabilities and explicit consent separately.

@@ -7,6 +7,7 @@ Spaces before each mutation. An accepted plan is not evidence of restoration.
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 
+from spacekeeper.matching import WindowRule
 from spacekeeper.snapshot import Snapshot, Window, WindowIdentity
 
 
@@ -16,6 +17,7 @@ class DecisionStatus(StrEnum):
     SKIPPED = "skipped"
     UNSUPPORTED = "unsupported"
     BLOCKED = "blocked"
+    EXCLUDED = "excluded"
 
 
 class Reason(StrEnum):
@@ -30,6 +32,7 @@ class Reason(StrEnum):
     NO_NORMAL_DESTINATION = "no_normal_destination"
     EXTRA_FULLSCREEN = "extra_fullscreen"
     EXTRA_ORDINARY = "extra_ordinary"
+    PRESERVED = "preserved_extra"
     SESSION_MISMATCH = "session_mismatch"
     VISIBLE_WINDOW_UNAVAILABLE = "visible_window_unavailable"
     FOCUS_UNAVAILABLE = "focus_unavailable"
@@ -89,7 +92,7 @@ def _unsupported(window: Window) -> Reason | None:
     return None
 
 
-def plan_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
+def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRule, ...] = ()) -> RestorePlan:
     """Return deterministic per-window targets and final visibility/focus intent.
 
     Reused saved IDs are skipped and are not reclassified as extra windows.
@@ -145,6 +148,8 @@ def plan_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
             decisions.append(WindowDecision(extra.id, DecisionStatus.UNSUPPORTED, unsupported))
         elif not extra.fullscreen:
             decisions.append(WindowDecision(extra.id, DecisionStatus.UNCHANGED, Reason.EXTRA_ORDINARY))
+        elif any(rule.matches(extra) for rule in preserve):
+            decisions.append(WindowDecision(extra.id, DecisionStatus.EXCLUDED, Reason.PRESERVED))
         else:
             assert extra.identity is not None and extra.display_uuid is not None
             decisions.append(WindowDecision(extra.id, DecisionStatus.PLANNED, Reason.EXTRA_FULLSCREEN,

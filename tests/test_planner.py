@@ -4,11 +4,25 @@ import unittest
 from uuid import UUID
 
 from spacekeeper.planner import DecisionStatus as Status, Reason, plan_restore
+from spacekeeper.matching import WindowRule
 from spacekeeper.snapshot import ProcessIdentity
 from tests.support import A, B, DISPLAYS, FRAME, SESSION, observe, window
 
 
 class PlannerTests(unittest.TestCase):
+    def test_preserve_rules_apply_only_to_matching_extra_fullscreen_windows(self):
+        saved = observe(window())
+        current = observe(window(fullscreen=True), window(2, fullscreen=True, title='Meeting'),
+                          window(3, fullscreen=True, title='Work'), window(4))
+        plan = plan_restore(saved, current, preserve=(WindowRule('SYNTHETIC*', '*meeting*'),))
+        decisions = {d.window_id: d for d in plan.windows}
+        self.assertEqual(decisions[1].status, Status.PLANNED)
+        self.assertEqual(decisions[2].reason, Reason.PRESERVED)
+        self.assertEqual(decisions[2].status, Status.EXCLUDED)
+        self.assertIsNone(decisions[2].target)
+        self.assertEqual(decisions[3].reason, Reason.EXTRA_FULLSCREEN)
+        self.assertEqual(decisions[4].reason, Reason.EXTRA_ORDINARY)
+
     def test_different_boot_login_or_user_rejects_everything_including_extras(self):
         saved = observe(window())
         sessions = (replace(SESSION, boot_uuid=str(UUID(int=999))),

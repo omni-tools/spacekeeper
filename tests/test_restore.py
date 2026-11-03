@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from spacekeeper.restore import RestoreCoordinator, RestoreError, restore_lock
+from spacekeeper.matching import WindowRule
 from spacekeeper.storage import SnapshotStore, StorageError, StorageFailure
 from spacekeeper.yabai import Yabai, YabaiError, YabaiFailure
 from tests.fake_yabai import Clock, FakeYabai
@@ -13,6 +14,27 @@ from tests.support import A, B, SESSION, observe, window
 
 
 class RestoreTests(unittest.TestCase):
+    def test_preserved_extra_stays_untouched_and_does_not_make_restore_incomplete(self):
+        extra = window(2, fullscreen=True, display=B)
+        desktop = FakeYabai(window(focused=True), extra)
+        report = self.coordinator(desktop).restore(observe(window(focused=True)),
+                                                   preserve=(WindowRule('Synthetic*'),))
+        self.assertTrue(report.complete, report)
+        self.assertEqual(desktop.windows[2], extra)
+        self.assertEqual(report.windows[1].reason, 'preserved_extra')
+        self.assertFalse(any('2' in command for command in desktop.commands))
+
+    def test_preserved_window_changes_are_reported_by_final_verification(self):
+        desktop = FakeYabai(window(focused=True), window(2, fullscreen=True, display=B))
+        def changed(operation):
+            if operation == 'toggle':
+                desktop.windows[2] = replace(desktop.windows[2], title='same identity', fullscreen=False, space_id=102)
+        desktop.after_command = changed
+        report = self.coordinator(desktop).restore(observe(window(fullscreen=True, focused=True)),
+                                                   preserve=(WindowRule('*'),))
+        self.assertFalse(report.complete)
+        self.assertTrue(any(i.reason == 'preserved_window_changed' for i in report.issues))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
