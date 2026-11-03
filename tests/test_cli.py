@@ -16,6 +16,31 @@ from tests.support import A, B, SESSION, observe, window
 
 
 class CliTests(unittest.TestCase):
+    def test_preset_capture_preview_apply_and_overwrite(self):
+        captured = self.invoke('preset', 'capture', 'work')
+        self.assertEqual(captured.exit_code, 0, captured.output)
+        self.assertEqual(self.invoke('preset', 'capture', 'work').exit_code, 1)
+        self.assertEqual(self.invoke('preset', 'capture', 'work', '--force').exit_code, 0)
+        self.assertIn('work', self.invoke('preset', 'list').output)
+        self.assertIn('windows:', self.invoke('preset', 'show', 'work').output)
+        self.device.windows[1] = replace(self.device.windows[1], fullscreen=True, space_id=1001)
+        self.assertEqual(self.invoke('preset', 'plan', 'work').exit_code, 0)
+        self.assertFalse(self.state.exists())
+        result = self.invoke('preset', 'apply', 'work')
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertFalse(self.device.windows[1].fullscreen)
+        self.assertEqual(len(list((self.state/'backups').glob('*.json'))), 1)
+
+    def test_preset_list_show_and_invalid_yaml_do_not_require_native_access(self):
+        with patch('spacekeeper.cli.Yabai', side_effect=AssertionError('Unexpected native access')):
+            self.assertEqual(self.invoke('preset', 'list').exit_code, 0)
+            self.assertFalse(self.config.exists())
+            (self.config/'presets').mkdir(parents=True)
+            (self.config/'presets/bad.yaml').write_text('windows: []\nwindows: []')
+            self.assertEqual(self.invoke('preset', 'show', 'bad').exit_code, 1)
+            self.assertEqual(self.invoke('preset', 'apply', 'bad').exit_code, 1)
+        self.assertFalse(self.state.exists())
+
     def test_preserve_cli_rules_and_configuration_can_be_disabled(self):
         self.invoke('capture')
         self.device.windows[2] = window(2, fullscreen=True, display=B, title='Meeting')

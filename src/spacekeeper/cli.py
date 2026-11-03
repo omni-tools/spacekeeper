@@ -9,6 +9,7 @@ import click
 from spacekeeper.config import ConfigError, Settings
 from spacekeeper.identity import IdentityUnavailable
 from spacekeeper.matching import WindowRule
+from spacekeeper.presets import Preset, PresetError, PresetStore
 from spacekeeper.restore import RestoreCoordinator, RestoreError
 from spacekeeper.storage import SnapshotStore, StorageError, validate_name
 from spacekeeper.yabai import Yabai, YabaiError
@@ -32,7 +33,7 @@ DIRECTORY = click.Path(file_okay=False, path_type=Path)
 def operational_errors():
     try:
         yield
-    except (StorageError, YabaiError, IdentityUnavailable, RestoreError, ConfigError) as error:
+    except (StorageError, YabaiError, IdentityUnavailable, RestoreError, ConfigError, PresetError) as error:
         raise click.ClickException(str(error)) from error
 
 
@@ -121,16 +122,90 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
         coordinator = RestoreCoordinator(desktop(settings), store, timeout=settings.timeout,
                                          on_backup=lambda path: click.echo(f'Pre-restore backup: {path}'))
         report = coordinator.restore(saved, preserve=preserve)
-        counts = Counter(window.status for window in report.windows)
-        summary = ', '.join(f'{count} {status}' for status, count in sorted(counts.items())) or 'no windows'
-        click.echo(('Restore complete: ' if report.complete else 'Restore incomplete: ') + summary)
-        for window in report.windows:
-            if window.monitor_fallback:
-                click.echo(f'Window {window.window_id}: saved monitor disconnected; using its current monitor.')
-            if window.status not in ('restored', 'unchanged', 'excluded'):
-                click.echo(f'Window {window.window_id}: {window.status} ({window.reason}).')
-        for issue in report.issues:
-            click.echo(f'{issue.scope}: {issue.reason}' + (f' (window {issue.window_id})' if issue.window_id is not None else ''))
-        click.echo(f'Report: {report.report_path}')
-        if not report.complete:
-            ctx.exit(1)
+        emit_report(ctx, report)
+
+
+def emit_report(ctx, report):
+    counts = Counter(window.status for window in report.windows)
+    summary = ', '.join(f'{count} {status}' for status, count in sorted(counts.items())) or 'no windows'
+    click.echo(('Restore complete: ' if report.complete else 'Restore incomplete: ') + summary)
+    for window in report.windows:
+        if window.monitor_fallback:
+            click.echo(f'Window {window.window_id}: saved monitor disconnected; using its current monitor.')
+        if window.status not in ('restored', 'unchanged', 'excluded'):
+            click.echo(f'Window {window.window_id}: {window.status} ({window.reason}).')
+    for issue in report.issues:
+        click.echo(f'{issue.scope}: {issue.reason}' + (f' (window {issue.window_id})' if issue.window_id is not None else ''))
+    click.echo(f'Report: {report.report_path}')
+    if not report.complete:
+        ctx.exit(1)
+
+
+@main.group('preset')
+def preset_commands():
+    """Capture, inspect, and apply named YAML layouts."""
+
+
+@preset_commands.command('capture')
+@click.argument('name', type=NAME)
+@click.option('--force', is_flag=True, help='Replace an existing preset.')
+@click.pass_obj
+def capture_preset(settings: Settings, name: str, force: bool):
+    """Capture supported windows as app/title/device rules without moving them."""
+    with operational_errors():
+        snapshot = desktop(settings).observe(deadline=time.monotonic() + settings.timeout)
+        preset = Preset.capture(snapshot)
+        path = PresetStore(settings.config_dir).save(preset, name, force=force)
+        click.echo(f'Saved preset {name}: {len(preset.windows)} rules. {path}')
+
+
+@preset_commands.command('list')
+@click.pass_obj
+def list_presets(settings: Settings):
+    """List named presets without querying the desktop."""
+    with operational_errors():
+        names = PresetStore(settings.config_dir).entries()
+        click.echo('\n'.join(names) if names else 'No presets.')
+
+
+@preset_commands.command('show')
+@click.argument('name', type=NAME)
+@click.pass_obj
+def show_preset(settings: Settings, name: str):
+    """Print a validated preset's YAML without querying the desktop."""
+    with operational_errors():
+        click.echo(PresetStore(settings.config_dir).load(name).to_yaml(), nl=False)
+
+
+@preset_commands.command('plan')
+@click.argument('name', type=NAME)
+@click.pass_obj
+def plan_preset(settings: Settings, name: str):
+    """Preview current matches and targets without moving windows or creating state."""
+    with operational_errors():
+        preset = PresetStore(settings.config_dir).load(name)
+        snapshot = desktop(settings).observe(deadline=time.monotonic() + settings.timeout)
+        plan = preset.plan(snapshot)
+        for decision in plan.windows:
+            if decision.target is not None:
+                display = next(d.index for d in snapshot.displays if d.uuid == decision.target.display_uuid)
+                click.echo(f'Window {decision.window_id}: {decision.status.value}; monitor {display}; '
+                           f'fullscreen {str(decision.target.fullscreen).lower()}.')
+
+
+@preset_commands.command('apply')
+@click.argument('name', type=NAME)
+@click.pass_context
+def apply_preset(ctx: click.Context, name: str):
+    """Apply rules to all matching windows; leave unmatched placements unchanged.
+
+    Uses a verified pre-restore backup, ownership guards, and final verification.
+    The last matched window per monitor becomes visible; the last rule's last
+    matched window receives final focus. No missing applications are launched.
+    """
+    settings = ctx.obj
+    with operational_errors():
+        preset = PresetStore(settings.config_dir).load(name)
+        coordinator = RestoreCoordinator(desktop(settings), SnapshotStore(settings.state_dir), timeout=settings.timeout,
+                                         on_backup=lambda path: click.echo(f'Pre-restore backup: {path}'))
+        emit_report(ctx, coordinator.apply_preset(preset))

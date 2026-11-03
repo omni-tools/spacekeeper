@@ -32,3 +32,21 @@ class LiveYabaiTests(unittest.TestCase):
         self.assertEqual(observed.window.identity, target.identity, 'Target ownership changed during observation.')
         self.assertIn(observed.window.display_uuid, {d.uuid for d in observed.displays},
                       'Target monitor was not resolved.')
+
+    def test_read_only_preset_plan_uses_current_owners(self):
+        from glob import escape
+        import yaml
+        from spacekeeper.planner import unsupported_reason
+        from spacekeeper.presets import Preset
+        snapshot = Yabai().observe()
+        target = next((w for w in snapshot.windows if unsupported_reason(w) is None and
+                       sum((x.app.casefold(), x.title.casefold()) == (w.app.casefold(), w.title.casefold())
+                           for x in snapshot.windows) == 1), None)
+        if target is None:
+            self.skipTest('No uniquely selectable supported window is available.')
+        preset = Preset.from_yaml(yaml.safe_dump({'windows': [{'app': escape(target.app), 'title': escape(target.title),
+                                                              'device': target.display_uuid,
+                                                              'fullscreen': target.fullscreen}]}))
+        plan = preset.plan(snapshot)
+        self.assertTrue(plan.accepted and all(d.target is None or d.target.identity == target.identity
+                                             for d in plan.windows), 'Preset selected an unexpected identity.')

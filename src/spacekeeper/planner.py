@@ -33,6 +33,7 @@ class Reason(StrEnum):
     EXTRA_FULLSCREEN = "extra_fullscreen"
     EXTRA_ORDINARY = "extra_ordinary"
     PRESERVED = "preserved_extra"
+    PRESET_UNMATCHED = "preset_unmatched"
     SESSION_MISMATCH = "session_mismatch"
     VISIBLE_WINDOW_UNAVAILABLE = "visible_window_unavailable"
     FOCUS_UNAVAILABLE = "focus_unavailable"
@@ -80,7 +81,7 @@ class RestorePlan:
         return asdict(self)
 
 
-def _unsupported(window: Window) -> Reason | None:
+def unsupported_reason(window: Window) -> Reason | None:
     if window.sticky or not window.root_window or (window.role, window.subrole) != ("AXWindow", "AXStandardWindow"):
         return Reason.PROTECTED_WINDOW
     if window.hidden or window.minimized:
@@ -108,7 +109,7 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
     decisions = []
 
     for wanted in sorted(saved.windows, key=lambda w: w.id):
-        if _unsupported(wanted) == Reason.PROTECTED_WINDOW:
+        if unsupported_reason(wanted) == Reason.PROTECTED_WINDOW:
             decisions.append(WindowDecision(wanted.id, DecisionStatus.UNSUPPORTED, Reason.PROTECTED_WINDOW))
             continue
         actual = live_windows.get(wanted.id)
@@ -121,7 +122,7 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
         if wanted.identity != actual.identity:
             decisions.append(WindowDecision(wanted.id, DecisionStatus.SKIPPED, Reason.OWNER_CHANGED))
             continue
-        unsupported = _unsupported(wanted) or _unsupported(actual)
+        unsupported = unsupported_reason(wanted) or unsupported_reason(actual)
         if unsupported is not None:
             decisions.append(WindowDecision(wanted.id, DecisionStatus.UNSUPPORTED, unsupported))
             continue
@@ -143,7 +144,7 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
                                             target, fallback))
 
     for extra in sorted((w for w in current.windows if w.id not in saved_ids), key=lambda w: w.id):
-        unsupported = _unsupported(extra)
+        unsupported = unsupported_reason(extra)
         if unsupported is not None:
             decisions.append(WindowDecision(extra.id, DecisionStatus.UNSUPPORTED, unsupported))
         elif not extra.fullscreen:

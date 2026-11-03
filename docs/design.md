@@ -60,15 +60,15 @@ Use shell-free subprocess argument arrays, bounded timeouts and output, clear er
 
 Reuse behavior from the prototypes; replace their top-level script structure and hardcoded assumptions. Neither prototype is the finished v0 implementation.
 
-## Later versions
+## Features beyond v0
 
 1. **Preserve filters (implemented):** case-insensitive app/title globs leave matching extra fullscreen windows untouched. A rule requires app and optionally title (default `*`); its fields match together and rules combine with OR. `restore --preserve APP_GLOB TITLE_GLOB` adds to `config.json`'s `preserve` list. `--no-preserve` disables configured rules. Final verification checks preserved ownership, fullscreen, monitor, Space, and frame.
-2. **YAML presets:** minimal rules contain app name and device; optional title matching narrows a rule. Apply a rule to all matching windows. Support flexible/fuzzy names and capture the current arrangement into a preset. Define device aliases and ambiguous fuzzy-match behavior before implementation; the interview did not settle them. Avoid silently choosing an unrelated app/device.
+2. **YAML presets (implemented):** named YAML files under the config root's `presets/` directory contain app/device rules with optional title and fullscreen fields. Exact app names win; explicit globs can match several apps; otherwise only a unique normalized substring of at least three characters is accepted. Title globs are case-insensitive. Device aliases bind to UUIDs, `primary` is current yabai index 1, and shortened aliases must be unambiguous. Every matching window receives the rule; unmatched windows retain placement/fullscreen. Conflicts, no-match rules, disconnected monitors, and unsupported matches fail before edits. The last matched window per monitor becomes visible, and the last rule's last matched window receives focus. Capture escapes app/title glob characters and rejects identical selectors with different targets. Apply uses the common backup/guard/verification coordinator. Commands: `preset capture/list/show/plan/apply`.
 3. **SA-assisted positioning:** restore exact Space monitor placement/order when scripting addition capabilities are available. See the [SA handoff](draft/HANDOFF.yabai-sa-and-space-reordering.md). Normal frame restore can be supported separately where Accessibility allows it; it does not intrinsically require SA.
 4. **Respawning:** optionally launch missing apps/windows; define app-specific restoration capabilities and explicit consent separately.
 5. **Integrations:** a native VS Code companion or other program can consume the CLI. No VS Code dependency in the backend.
 
-A tentative preset shape, **illustrative rather than a finalized schema**:
+A minimal preset shape (fullscreen defaults to true; external aliases must be defined as monitor UUIDs):
 
 ```yaml
 windows:

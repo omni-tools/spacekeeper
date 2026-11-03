@@ -4,7 +4,7 @@ Capture and restore macOS fullscreen window arrangements through yabai.
 
 **Status: v0 capture/list/restore CLI implemented, with synthetic end-to-end tests and a scoped native CLI restore check.**
 
-Save named snapshots of the running macOS session and restore fullscreen states and original monitors. Preserve filters can keep selected extra fullscreen windows untouched. YAML presets, flexible app/title matching, reopening missing windows, and scripting-addition-assisted Space ordering are planned for later versions.
+Save named snapshots of the running macOS session and restore fullscreen states and original monitors. Preserve filters keep selected extra fullscreen windows untouched. YAML presets apply app/title/device rules to current windows. Reopening missing windows and scripting-addition-assisted Space ordering are planned for later versions.
 
 ## Start here
 
@@ -97,6 +97,56 @@ restores, **2** for usage errors. A complete restore confirms supported targets,
 visible windows, and focus. Expected system-window exclusions are listed
 separately; closed, unsupported, blocked, or failed targets make the result
 incomplete. Structured JSON reports are stored privately; stdout is human-readable.
+
+## YAML presets
+
+Presets live in `~/.config/spacekeeper/presets/NAME.yaml`, under the selected
+`--config-dir`. They describe matching apps/titles and monitors independently of
+snapshot window IDs, so they can be reused in another login session.
+
+```sh
+spacekeeper preset capture work        # Save supported current windows as rules.
+spacekeeper preset list
+spacekeeper preset show work
+spacekeeper preset plan work           # Read-only preview against current windows.
+spacekeeper preset apply work          # Changes the desktop; saves a backup first.
+spacekeeper preset capture work --force
+```
+
+```yaml
+version: 1
+devices:
+  external: 00000000-0000-0000-0000-000000000002 # Replace with a captured monitor UUID.
+windows:
+  - app: Code
+    device: primary
+  - app: Chrome
+    title: '*Research*'
+    device: external
+    fullscreen: true
+```
+
+App matching prefers an exact case-insensitive name. Explicit app globs match all
+matching apps; otherwise a unique substring of at least three letters/digits can
+resolve a shortened app name, ignoring spacing and punctuation. Title selectors
+are case-insensitive globs. Each rule applies to all matching windows.
+`primary` means current yabai display index 1; captured `display-N` aliases bind
+to UUIDs. Device aliases also accept unambiguous shortened names, or a connected
+monitor UUID can be used directly. Disconnected monitors, ambiguous names,
+unsupported matches, unmatched rules, and conflicting targets fail before edits.
+
+Fullscreen defaults to `true`; set it to `false` for ordinary windows. Unmatched
+windows retain their fullscreen state, monitor, Space, and frame. The last
+matched window on each destination monitor becomes visible, and the last rule's
+last matched window receives final focus. Apply uses the same lock, verified
+backup, ownership guards, and final verification as snapshot restore. Snapshot
+preserve filters do not override preset rules.
+
+Capture escapes literal wildcard characters and stores explicit title selectors.
+Identical app/title selectors with different targets cannot be represented and
+are reported instead of guessed. Preset names require `--force` for replacement.
+YAML uses safe loading; duplicate keys, aliases, unknown fields, and invalid types
+are rejected. Presets must fit within 64 KiB.
 
 ## Backend foundation
 

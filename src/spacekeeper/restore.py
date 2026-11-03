@@ -12,6 +12,7 @@ from typing import Callable
 from spacekeeper.identity import IdentityUnavailable
 from spacekeeper.matching import WindowRule
 from spacekeeper.planner import DecisionStatus, Reason, RestorePlan, WindowTarget, plan_restore
+from spacekeeper.presets import Preset
 from spacekeeper.snapshot import Snapshot, WindowIdentity
 from spacekeeper.storage import SnapshotStore
 from spacekeeper.transitions import Desktop, TransitionStatus, WindowTransitions
@@ -134,12 +135,19 @@ class RestoreCoordinator:
         raise YabaiError(YabaiFailure.TIMEOUT, "Focus/visibility restoration was not confirmed.")
 
     def restore(self, saved: Snapshot, *, preserve: tuple[WindowRule, ...] = ()) -> RestoreReport:
+        return self._restore(saved, lambda before: plan_restore(saved, before, preserve=preserve))
+
+    def apply_preset(self, preset: Preset) -> RestoreReport:
+        return self._restore(None, preset.plan)
+
+    def _restore(self, saved: Snapshot | None, build_plan: Callable[[Snapshot], RestorePlan]) -> RestoreReport:
         with restore_lock(self.lock_path):
             before = self._observe(self.clock() + self.timeout)
             backup = self.store.backup(before)  # Must succeed and read back before any mutation.
             if self.on_backup is not None:
                 self.on_backup(backup)
-            plan = plan_restore(saved, before, preserve=preserve)
+            plan = build_plan(before)
+            saved = before if saved is None else saved
             outcomes, issues = [], [RestoreIssue("planning", item.reason.value, item.window_id, item.display_uuid)
                                     for item in plan.issues]
             session_changed = False
@@ -237,12 +245,13 @@ class RestoreCoordinator:
                     issues.append(RestoreIssue("verification", "missing_or_changed_owner", decision.window_id))
                 elif (window.display_uuid, window.fullscreen) != (target.display_uuid, target.fullscreen):
                     issues.append(RestoreIssue("verification", "window_target_mismatch", decision.window_id))
-            elif decision.reason in (Reason.EXTRA_ORDINARY, Reason.PRESERVED):
+            elif decision.reason in (Reason.EXTRA_ORDINARY, Reason.PRESERVED, Reason.PRESET_UNMATCHED):
                 previous = original[decision.window_id]
                 if window is None or window.identity != previous.identity or any(
                     getattr(window, key) != getattr(previous, key) for key in ("fullscreen", "display_uuid", "space_id", "frame")
                 ):
-                    reason = 'preserved_window_changed' if decision.reason == Reason.PRESERVED else 'extra_ordinary_changed'
+                    reason = {Reason.EXTRA_ORDINARY: 'extra_ordinary_changed', Reason.PRESERVED: 'preserved_window_changed',
+                              Reason.PRESET_UNMATCHED: 'unmatched_window_changed'}[decision.reason]
                     issues.append(RestoreIssue("verification", reason, decision.window_id))
         for target in plan.visible:
             window = current.get(target.identity.window_id)

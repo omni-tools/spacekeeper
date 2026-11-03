@@ -12,9 +12,11 @@ class WindowRule:
     title: str = '*'
 
     def __post_init__(self):
+        if type(self.app) is not str or not self.app.strip():
+            raise ValueError('The app pattern must be a nonempty string.')
         for value in (self.app, self.title):
-            if type(value) is not str or not value.strip() or '\0' in value or len(value) > 1024:
-                raise ValueError('App and title patterns must be nonempty strings of at most 1024 characters.')
+            if type(value) is not str or '\0' in value or len(value) > 1024:
+                raise ValueError('App and title patterns must be strings of at most 1024 characters.')
 
     def matches(self, window: Window) -> bool:
         return (fnmatchcase(window.app.casefold(), self.app.casefold()) and
