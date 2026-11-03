@@ -171,6 +171,24 @@ Sticky, system, overlay, hidden, and minimized windows are currently unsupported
 Window ID reuse within the same surviving process and WindowServer restarts
 within a login session are not independently detected by these identity tokens.
 
+## Continuous integration
+
+GitHub Actions runs the synthetic tests on Ubuntu and macOS 15 with Python
+3.12–3.15 for pushes to `main`, pull requests, and manual runs. A packaging job
+builds the wheel and source distribution, checks their contents and private-path
+exclusions, installs both in fresh environments, and checks CLI entry points
+outside the checkout. Distributions are retained as artifacts for seven days.
+Native identity/yabai checks remain explicit local tests; CI requires no desktop
+session, Accessibility permission, or yabai service.
+
+Reproduce the core checks locally:
+
+```sh
+uv run --locked python -m unittest discover -s tests -t . -p 'test_*.py' -v
+uv build --no-sources
+uv run --locked python scripts/check-distributions.py
+```
+
 ## Try the prototypes
 
 Requires macOS, Python 3, a running yabai service, and yabai Accessibility permission. These are one-off prototypes, not the eventual CLI:

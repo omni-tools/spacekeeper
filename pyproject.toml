@@ -20,4 +20,4 @@ requires = ["uv_build>=0.12.21,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-source-include = ["tests/**"]
+source-include = ["tests/**", "scripts/check-distributions.py"]
