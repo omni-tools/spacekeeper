@@ -52,10 +52,12 @@ workspace name after the last ` — ` instead of the whole title: `old.py — co
 matches `new.py — codex` or `codex`. The app must still match, and duplicate
 workspace names in either observation are ambiguous. For title matching,
 Extension Development Host windows are separate from regular workspace windows.
-If no title match exists, an app with exactly one saved window and one current
-window matches regardless of title. This counts all observed windows for that
-app, including hidden or unsupported ones; one unmatched remainder of a
-multiwindow app does not qualify. The app name and current ownership must still
+If no title match exists, an app with exactly one saved main window and one
+current main window matches regardless of title. Known sticky windows, dialogs,
+and system/overlay windows do not count. Hidden windows and windows with unknown
+roles still count, so one unmatched remainder of a multiwindow app does not
+qualify. Missing role metadata is reported as `metadata_unavailable` and blocks
+commands until it is readable. The app name and current ownership must still
 match. Reports distinguish `app_title` and `single_window_app` match methods.
 Matched windows use their current process identities and restore the saved
 fullscreen/monitor/minimized targets; unmatched current windows stay untouched, including

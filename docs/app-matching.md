@@ -5,9 +5,10 @@ Stale-session snapshot restore calls `restore_name_key(window)` from
 windows. The function case-folds app names and titles, then applies a registered
 title rule. Unregistered apps keep their full titles. Title matching requires a
 unique key in both observations. If no title match exists, the planner can match
-an app with exactly one saved and one current window regardless of title. It
-counts all observed windows for that app, including hidden or unsupported ones;
-one unmatched remainder does not qualify. All matches bind the current process
+an app with exactly one saved and one current main window regardless of title.
+Known sticky, dialog, and system/overlay windows do not count. Hidden windows and
+windows with unknown roles still count; one unmatched remainder does not qualify.
+All matches bind the current process
 identity before any commands, with the method recorded as `app_title` or
 `single_window_app` in plans and reports.
 
@@ -49,5 +50,7 @@ uv tool install --reinstall --python 3.12 .
 
 Title rules only affect snapshot name fallback. Same-session owner matching,
 `--no-fallback`, preset selectors, preserve filters, and final verification retain
-their existing policies. Rules cannot recover missing query metadata: an empty
-title/role needs a valid observation before it can identify a saved document.
+their existing policies. Title rules cannot recover missing query metadata. A
+sole main window may match without a title, but missing role or ownership
+metadata still blocks commands. Missing roles are reported as
+`metadata_unavailable`, rather than being silently excluded as system windows.

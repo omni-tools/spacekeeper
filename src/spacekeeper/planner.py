@@ -28,6 +28,7 @@ class Reason(StrEnum):
     CLOSED = "closed"
     OWNER_CHANGED = "owner_changed"
     IDENTITY_UNAVAILABLE = "identity_unavailable"
+    METADATA_UNAVAILABLE = "metadata_unavailable"
     PROTECTED_WINDOW = "protected_window"
     HIDDEN_OR_MINIMIZED = "hidden_or_minimized"
     PLACEMENT_UNAVAILABLE = "placement_unavailable"
@@ -93,7 +94,11 @@ class RestorePlan:
 
 
 def unsupported_reason(window: Window, *, allow_minimized: bool = False) -> Reason | None:
-    if window.sticky or not window.root_window or (window.role, window.subrole) != ("AXWindow", "AXStandardWindow"):
+    if window.sticky or not window.root_window:
+        return Reason.PROTECTED_WINDOW
+    if not window.role or not window.subrole:
+        return Reason.METADATA_UNAVAILABLE
+    if (window.role, window.subrole) != ("AXWindow", "AXStandardWindow"):
         return Reason.PROTECTED_WINDOW
     if window.hidden or (window.minimized and (not allow_minimized or window.fullscreen)):
         return Reason.HIDDEN_OR_MINIMIZED
@@ -219,14 +224,15 @@ def _name_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
     """A partial name restore never treats old window IDs as live references."""
     wanted_windows = [w for w in saved.windows if unsupported_reason(w) != Reason.PROTECTED_WINDOW]
     sources, live, live_apps = defaultdict(list), defaultdict(list), defaultdict(list)
-    # Count all observed windows, not just unmatched or supported ones. Hidden
-    # windows or incomplete metadata must not make a multiwindow app look unique.
-    source_app_counts = Counter(w.app.casefold() for w in saved.windows)
+    # Ignore known helpers, but retain hidden windows and unknown metadata.
+    # They must not make a multiwindow app look unique when counting candidates.
+    source_app_counts = Counter(w.app.casefold() for w in wanted_windows)
     for window in wanted_windows:
         sources[restore_name_key(window)].append(window)
     for window in current.windows:
         live[restore_name_key(window)].append(window)
-        live_apps[window.app.casefold()].append(window)
+        if unsupported_reason(window) != Reason.PROTECTED_WINDOW:
+            live_apps[window.app.casefold()].append(window)
     connected = {d.uuid for d in current.displays}
     normal_displays = {s.display_uuid for s in current.spaces if not s.fullscreen}
     decisions, targets, issues = {}, {}, []

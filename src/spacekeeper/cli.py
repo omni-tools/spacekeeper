@@ -104,7 +104,7 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
 
     Same-session restores exit fullscreen for extra windows. After a reboot or
     login change, unique app/title pairs are preferred. Code titles match by their
-    trailing workspace name. Apps with one saved and one current window can match
+    trailing workspace name. Apps with one saved and one current main window can match
     regardless of title. Unmatched current windows stay untouched. A verified
     backup is saved before mutations.
     Missing/ambiguous windows make the result incomplete (exit 1).
