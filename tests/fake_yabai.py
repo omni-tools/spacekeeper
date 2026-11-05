@@ -32,7 +32,7 @@ class FakeYabai:
         self.query_counts = {domain: 0 for domain in ("displays", "spaces", "windows")}
         self.queries = []
         self.space_indexes = {}
-        self.effects = {"focus": True, "toggle": True, "move": True}
+        self.effects = {"focus": True, "toggle": True, "move": True, "minimize": True, "deminimize": True}
         self.failures = {}
         self.on_query = lambda domain, count: None
         self.after_command = lambda operation: None
@@ -96,6 +96,8 @@ class FakeYabai:
             self.commands.append(args)
             if args[1:3] == ("window", "--focus"):
                 operation, id = "focus", int(args[3])
+            elif args[2] in ('--minimize', '--deminimize'):
+                operation, id = args[2][2:], int(args[3])
             elif args[3] == "--space":
                 operation, id = "move", int(args[2])
             else:
@@ -106,6 +108,10 @@ class FakeYabai:
             if self.effects[operation]:
                 if operation == "focus":
                     self.windows = {key: replace(w, focused=(key == id)) for key, w in self.windows.items()}
+                elif operation in ('minimize', 'deminimize'):
+                    if value.fullscreen:
+                        return ProcessResult(1, b'', b'cannot minimize a fullscreen window')
+                    self.windows[id] = replace(value, minimized=operation == 'minimize', focused=False)
                 elif operation == "toggle":
                     fullscreen = not value.fullscreen
                     space = 1000 + id if fullscreen else (101 if value.display_uuid == A else 102)

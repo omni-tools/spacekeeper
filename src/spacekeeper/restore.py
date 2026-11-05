@@ -118,7 +118,8 @@ class RestoreCoordinator:
     @staticmethod
     def _focus_matches(snapshot: Snapshot, identity: WindowIdentity, display_uuid: str | None) -> bool:
         window = next((w for w in snapshot.windows if w.identity == identity), None)
-        if window is None or (display_uuid is not None and window.display_uuid != display_uuid):
+        if (window is None or window.minimized or window.hidden or
+                (display_uuid is not None and window.display_uuid != display_uuid)):
             return False
         return window.focused and any(s.id == window.space_id and s.visible and s.focused for s in snapshot.spaces)
 
@@ -257,13 +258,15 @@ class RestoreCoordinator:
             if target is not None:
                 if window is None or window.identity != target.identity:
                     issues.append(RestoreIssue("verification", "missing_or_changed_owner", decision.window_id))
-                elif (window.display_uuid, window.fullscreen) != (target.display_uuid, target.fullscreen):
+                elif ((window.display_uuid, window.fullscreen) != (target.display_uuid, target.fullscreen) or
+                      (target.minimized is not None and window.minimized != target.minimized)):
                     issues.append(RestoreIssue("verification", "window_target_mismatch", decision.window_id))
             elif decision.reason in (Reason.EXTRA_ORDINARY, Reason.PRESERVED, Reason.PRESET_UNMATCHED,
                                      Reason.FALLBACK_UNMATCHED):
                 previous = original[decision.window_id]
                 if window is None or window.identity != previous.identity or any(
-                    getattr(window, key) != getattr(previous, key) for key in ("fullscreen", "display_uuid", "space_id", "frame")
+                    getattr(window, key) != getattr(previous, key)
+                    for key in ("fullscreen", "minimized", "hidden", "display_uuid", "space_id", "frame")
                 ):
                     reason = {Reason.EXTRA_ORDINARY: 'extra_ordinary_changed', Reason.PRESERVED: 'preserved_window_changed',
                               Reason.PRESET_UNMATCHED: 'unmatched_window_changed',
@@ -271,9 +274,10 @@ class RestoreCoordinator:
                     issues.append(RestoreIssue("verification", reason, decision.window_id))
         for target in plan.visible:
             window = current.get(target.identity.window_id)
-            if window is None or window.identity != target.identity or window.display_uuid != target.display_uuid or not any(
+            if (window is None or window.minimized or window.hidden or window.identity != target.identity or
+                    window.display_uuid != target.display_uuid or not any(
                 s.id == window.space_id and s.visible for s in final.spaces
-            ):
+            )):
                 issues.append(RestoreIssue("verification", "visible_window_mismatch", target.identity.window_id,
                                            target.display_uuid))
         if plan.focus is not None and not RestoreCoordinator._focus_matches(final, plan.focus, None):

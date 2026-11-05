@@ -281,16 +281,30 @@ class Yabai:
             raise YabaiError(YabaiFailure.IDENTITY_UNAVAILABLE, "Window ownership cannot be established.")
         if window.identity != identity:
             raise YabaiError(YabaiFailure.OWNER_CHANGED, "The window's owner has changed.")
-        if (window.sticky or window.hidden or window.minimized or not window.root_window or
+        if (window.sticky or window.hidden or not window.root_window or
                 (window.role, window.subrole) != ("AXWindow", "AXStandardWindow") or
                 window.display_uuid is None or window.space_id is None):
             raise YabaiError(YabaiFailure.UNSUPPORTED_WINDOW, "The window is not a supported restore target.")
         return WindowObservation(observed.session, window, observed.displays, observed.spaces)
 
     def _guard(self, identity: WindowIdentity, session: SessionIdentity,
-               deadline: float | None) -> tuple[WindowObservation, Window]:
+               deadline: float | None, *, allow_minimized: bool = False) -> tuple[WindowObservation, Window]:
         observed = self.observe_window(identity, session, deadline=deadline)
+        if observed.window.minimized and not allow_minimized:
+            raise YabaiError(YabaiFailure.UNSUPPORTED_WINDOW, "Restore a minimized window before focus or placement changes.")
         return observed, observed.window
+
+    def minimize(self, identity: WindowIdentity, session: SessionIdentity, desired: bool,
+                 *, deadline: float | None = None) -> None:
+        if type(desired) is not bool:
+            raise ValueError("desired must be a boolean.")
+        _, window = self._guard(identity, session, deadline, allow_minimized=True)
+        if window.minimized == desired:
+            return
+        if window.fullscreen:
+            raise YabaiError(YabaiFailure.WINDOW_STATE_CHANGED, "Exit fullscreen before minimizing a window.")
+        self._command("-m", "window", "--minimize" if desired else "--deminimize",
+                      str(identity.window_id), deadline=deadline)
 
     def focus(self, identity: WindowIdentity, session: SessionIdentity,
               *, deadline: float | None = None) -> WindowObservation | None:
@@ -339,8 +353,9 @@ class Yabai:
 
 
 def _focus_ready(observed: Snapshot | WindowObservation, window: Window) -> bool:
-    return window.focused and any(s.id == window.space_id and s.display_uuid == window.display_uuid and
-                                 s.visible and s.focused for s in observed.spaces)
+    return not window.minimized and not window.hidden and window.focused and any(
+        s.id == window.space_id and s.display_uuid == window.display_uuid and s.visible and s.focused
+        for s in observed.spaces)
 
 
 def _signature(raw: dict[str, list[dict]]) -> str:

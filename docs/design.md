@@ -18,7 +18,9 @@ Within the same running macOS session, match window ID plus owning process ident
 
 ### Restore behavior
 
-For windows represented by the snapshot, restore native fullscreen on/off and their saved monitor when connected. Match monitors by UUID rather than current arrangement index. If a saved monitor is disconnected, keep the window on its current monitor and restore fullscreen state there; report the fallback.
+For windows represented by the snapshot, restore native fullscreen on/off, minimized state in the Dock, and their saved monitor when connected. Match monitors by UUID rather than current arrangement index. If a saved monitor is disconnected, keep the window on its current monitor and restore fullscreen/minimized state there; report the fallback.
+
+Snapshot targets explicitly include minimized state, in both original-session and name-fallback restores. Restore a minimized window from the Dock before any monitor or fullscreen changes, then minimize last when the saved state requires it. An already-matching minimized window stays in the Dock without focus operations. Final verification includes minimized state, and unmatched windows retain their Dock state. Hidden apps and protected windows remain unsupported. Presets do not manage minimized state and continue to reject minimized matches.
 
 **In same-session restore, extra windows absent from the snapshot exit fullscreen by default.** They stay open. Extra ordinary windows remain unchanged. Do not treat sticky/system/overlay windows as restore targets. Optional preserve filters exclude matching extra fullscreen windows from this policy. In stale-session name fallback, unmatched current windows remain untouched without needing preserve filters. Matched saved windows follow their snapshot targets.
 

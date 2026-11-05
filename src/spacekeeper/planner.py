@@ -48,6 +48,8 @@ class WindowTarget:
     identity: WindowIdentity
     display_uuid: str
     fullscreen: bool
+    # None leaves Dock state outside this target's scope (presets and extras).
+    minimized: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -88,10 +90,10 @@ class RestorePlan:
         return asdict(self)
 
 
-def unsupported_reason(window: Window) -> Reason | None:
+def unsupported_reason(window: Window, *, allow_minimized: bool = False) -> Reason | None:
     if window.sticky or not window.root_window or (window.role, window.subrole) != ("AXWindow", "AXStandardWindow"):
         return Reason.PROTECTED_WINDOW
-    if window.hidden or window.minimized:
+    if window.hidden or (window.minimized and (not allow_minimized or window.fullscreen)):
         return Reason.HIDDEN_OR_MINIMIZED
     if window.identity is None:
         return Reason.IDENTITY_UNAVAILABLE
@@ -105,11 +107,12 @@ def _window_target(wanted: Window, actual: Window, connected: set[str], normal_d
     fallback = wanted.display_uuid not in connected
     destination = actual.display_uuid if fallback else wanted.display_uuid
     assert destination is not None and actual.identity is not None
-    target = WindowTarget(actual.identity, destination, wanted.fullscreen)
+    target = WindowTarget(actual.identity, destination, wanted.fullscreen, wanted.minimized)
     if actual.display_uuid != destination and destination not in normal_displays:
         return WindowDecision(actual.id, DecisionStatus.BLOCKED, Reason.NO_NORMAL_DESTINATION,
                               monitor_fallback=fallback, source_window_id=source_window_id)
-    status = (DecisionStatus.UNCHANGED if (actual.display_uuid, actual.fullscreen) == (destination, wanted.fullscreen)
+    status = (DecisionStatus.UNCHANGED if (actual.display_uuid, actual.fullscreen, actual.minimized) ==
+              (destination, wanted.fullscreen, wanted.minimized)
               else DecisionStatus.PLANNED)
     reason = Reason.ALREADY_MATCHES if status == DecisionStatus.UNCHANGED else Reason.RESTORE_SAVED
     return WindowDecision(actual.id, status, reason, target, fallback, source_window_id)
@@ -128,12 +131,14 @@ def _views(saved: Snapshot, targets: dict[int, WindowTarget | None], connected: 
         if space.display_uuid not in connected:
             continue
         target = targets.get(space.visible_window_id)
-        if target is not None and target.display_uuid == space.display_uuid:
+        if target is not None and not target.minimized and target.display_uuid == space.display_uuid:
             visible.append(VisibleTarget(space.display_uuid, target.identity))
         elif space.visible_window_id is not None:
             unavailable(Reason.VISIBLE_WINDOW_UNAVAILABLE, space.visible_window_id, space.display_uuid)
     focused = next((w for w in saved.windows if w.focused), None)
     focus_target = targets.get(focused.id) if focused is not None else None
+    if focus_target is not None and focus_target.minimized:
+        focus_target = None
     if focused is not None and focus_target is None:
         unavailable(Reason.FOCUS_UNAVAILABLE, focused.id)
     if focus_target is not None and focused.display_uuid not in connected:
@@ -179,7 +184,8 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
         if wanted.identity != actual.identity:
             decisions.append(WindowDecision(wanted.id, DecisionStatus.SKIPPED, Reason.OWNER_CHANGED))
             continue
-        unsupported = unsupported_reason(wanted) or unsupported_reason(actual)
+        unsupported = (unsupported_reason(wanted, allow_minimized=True) or
+                       unsupported_reason(actual, allow_minimized=True))
         if unsupported is not None:
             decisions.append(WindowDecision(wanted.id, DecisionStatus.UNSUPPORTED, unsupported))
             continue
@@ -219,7 +225,7 @@ def _name_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
     normal_displays = {s.display_uuid for s in current.spaces if not s.fullscreen}
     decisions, targets, issues = {}, {}, []
     for wanted in sorted(wanted_windows, key=lambda w: w.id):
-        unsupported = unsupported_reason(wanted)
+        unsupported = unsupported_reason(wanted, allow_minimized=True)
         if unsupported is not None:
             issues.append(PlanIssue(unsupported, source_window_id=wanted.id))
             continue
@@ -230,7 +236,7 @@ def _name_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
             issues.append(PlanIssue(Reason.NAME_AMBIGUOUS, source_window_id=wanted.id))
         else:
             actual = candidates[0]
-            unsupported = unsupported_reason(actual)
+            unsupported = unsupported_reason(actual, allow_minimized=True)
             if unsupported is not None:
                 issues.append(PlanIssue(unsupported, actual.id, source_window_id=wanted.id))
                 continue

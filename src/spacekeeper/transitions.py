@@ -25,6 +25,8 @@ class Desktop(Protocol):
               *, deadline: float | None = None) -> WindowObservation | None: ...
     def fullscreen(self, identity: WindowIdentity, session: SessionIdentity, desired: bool,
                    display_uuid: str, *, deadline: float | None = None) -> None: ...
+    def minimize(self, identity: WindowIdentity, session: SessionIdentity, desired: bool,
+                 *, deadline: float | None = None) -> None: ...
     def move_to_display(self, identity: WindowIdentity, session: SessionIdentity, display_uuid: str,
                         *, deadline: float | None = None) -> None: ...
 
@@ -60,6 +62,8 @@ class WindowTransitions:
 
     def _checked(self, target: WindowTarget, session: SessionIdentity, deadline: float) -> tuple[WindowObservation, Window]:
         observed = self.desktop.observe_window(target.identity, session, deadline=deadline)
+        if observed.window.minimized and target.minimized is None:
+            raise YabaiError(YabaiFailure.UNSUPPORTED_WINDOW, "This target does not manage minimized state.")
         if target.display_uuid not in {d.uuid for d in observed.displays}:
             raise YabaiError(YabaiFailure.DISPLAY_MISSING, "The target monitor disconnected during transition.")
         return observed, observed.window
@@ -102,11 +106,13 @@ class WindowTransitions:
     def apply(self, target: WindowTarget, session: SessionIdentity) -> TransitionResult:
         """Apply one target sequentially. No later stage runs after a failure.
 
-        VERIFIED refers only to this window's fullscreen/monitor postconditions;
+        VERIFIED refers only to this window's fullscreen/monitor/minimized postconditions;
         it does not verify the whole restore or final visibility/focus.
         """
         attempts = []
         try:
+            if target.minimized and target.fullscreen:
+                raise YabaiError(YabaiFailure.UNSUPPORTED_WINDOW, "A fullscreen target cannot be minimized.")
             initial, current = self._checked(target, session, self.clock() + self.timeout)
             confirmed = False
 
@@ -136,6 +142,16 @@ class WindowTransitions:
                                       space_fullscreen=desired)
                 raise YabaiError(YabaiFailure.TIMEOUT, 'Fullscreen transition did not complete.')
 
+            def change_minimized(desired: bool) -> Window:
+                deadline = self.clock() + self.timeout
+                attempts.append('minimize' if desired else 'deminimize')
+                self.desktop.minimize(target.identity, session, desired, deadline=deadline)
+                return self._wait(target, session, deadline, lambda w: w.minimized == desired)
+
+            if current.minimized and (not target.minimized or current.display_uuid != target.display_uuid):
+                current = change_minimized(False)
+                confirmed = True
+
             if current.fullscreen and (not target.fullscreen or current.display_uuid != target.display_uuid):
                 current = change_fullscreen(False, current.display_uuid)
                 confirmed = True
@@ -153,11 +169,18 @@ class WindowTransitions:
                 current = change_fullscreen(True, target.display_uuid)
                 confirmed = True
 
+            if target.minimized and not current.minimized:
+                current = change_minimized(True)
+                confirmed = True
+
             # The last successful wait already confirmed these postconditions
             # twice. No operation occurred since; do not poll the same result again.
-            if not confirmed or (current.fullscreen, current.display_uuid) != (target.fullscreen, target.display_uuid):
+            def matches(window):
+                return (window.fullscreen == target.fullscreen and window.display_uuid == target.display_uuid and
+                        (target.minimized is None or window.minimized == target.minimized))
+            if not confirmed or not matches(current):
                 self._wait(target, session, self.clock() + self.timeout,
-                           lambda w: w.fullscreen == target.fullscreen and w.display_uuid == target.display_uuid,
+                           matches,
                            space_fullscreen=target.fullscreen, initial=initial if not attempts else None)
             return TransitionResult(target.identity, TransitionStatus.VERIFIED, None, tuple(attempts))
         except YabaiError as error:

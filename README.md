@@ -4,7 +4,7 @@ Capture and restore macOS fullscreen window arrangements through yabai.
 
 **Status: v0 capture/list/restore CLI implemented, with synthetic end-to-end tests and a scoped native CLI restore check.**
 
-Save named snapshots of the running macOS session and restore fullscreen states and original monitors. Preserve filters keep selected extra fullscreen windows untouched. YAML presets apply app/title/device rules to current windows. Reopening missing windows and scripting-addition-assisted Space ordering are planned for later versions.
+Save named snapshots of the running macOS session and restore fullscreen states, Dock minimization, and original monitors. Preserve filters keep selected extra fullscreen windows untouched. YAML presets apply app/title/device rules to current windows. Reopening missing windows and scripting-addition-assisted Space ordering are planned for later versions.
 
 ## Start here
 
@@ -48,7 +48,7 @@ After a reboot or login change, restore defaults to a partial name fallback for
 the same user. A saved app/title pair must match exactly one window in both the
 snapshot and the current desktop, case-insensitively. Names are literal, not
 globs. Matched windows use their current process identities and restore the saved
-fullscreen/monitor targets; unmatched current windows stay untouched, including
+fullscreen/monitor/minimized targets; unmatched current windows stay untouched, including
 fullscreen windows. Missing, ambiguous, and unsupported sources are reported and
 make the restore incomplete (exit 1). Reports identify source snapshot IDs
 separately from current window IDs. Another user's snapshot is still rejected.
@@ -63,6 +63,10 @@ spacekeeper restore alpha --no-fallback  # Require the original boot/login sessi
 Same-session closed/replaced owners remain skipped; name fallback is for stale
 boot/login sessions. Restore does not reopen apps/windows or restore Space
 ordering or ordinary window frames. `--no-fallback` also applies with `--backup`.
+Snapshot restore minimizes matched windows saved in the Dock and restores matched
+windows saved outside it. Monitor and fullscreen changes happen before final
+minimization; a minimized target is never focused for final visibility. Hidden
+apps and protected/system windows remain unsupported.
 
 Snapshot names are 1–64 ASCII letters, digits, dots, underscores, or hyphens,
 starting with a letter or digit. The default state directory is
