@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from collections import defaultdict
 from enum import StrEnum
 
+from spacekeeper.app_matching import restore_name_key
 from spacekeeper.matching import WindowRule
 from spacekeeper.snapshot import Snapshot, Window, WindowIdentity
 
@@ -214,23 +215,12 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
 
 def _name_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
     """A partial name restore never treats old window IDs as live references."""
-    def key(window):
-        app, title = window.app.casefold(), window.title.casefold()
-        if app in ('code', 'code - oss', 'code - insiders'):
-            # Active files change; the final title component names the workspace.
-            # Keep extension hosts distinct from normal windows of that project.
-            host = '[extension development host] '
-            prefix = host if title.startswith(host) else ''
-            workspace = title.removeprefix(prefix).rsplit(' — ', 1)[-1].strip()
-            if workspace:
-                title = prefix + workspace
-        return app, title
     wanted_windows = [w for w in saved.windows if unsupported_reason(w) != Reason.PROTECTED_WINDOW]
     sources, live = defaultdict(list), defaultdict(list)
     for window in wanted_windows:
-        sources[key(window)].append(window)
+        sources[restore_name_key(window)].append(window)
     for window in current.windows:
-        live[key(window)].append(window)
+        live[restore_name_key(window)].append(window)
     connected = {d.uuid for d in current.displays}
     normal_displays = {s.display_uuid for s in current.spaces if not s.fullscreen}
     decisions, targets, issues = {}, {}, []
@@ -239,10 +229,10 @@ def _name_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
         if unsupported is not None:
             issues.append(PlanIssue(unsupported, source_window_id=wanted.id))
             continue
-        candidates = live[key(wanted)]
+        candidates = live[restore_name_key(wanted)]
         if not candidates:
             issues.append(PlanIssue(Reason.NAME_NO_MATCH, source_window_id=wanted.id))
-        elif len(sources[key(wanted)]) != 1 or len(candidates) != 1:
+        elif len(sources[restore_name_key(wanted)]) != 1 or len(candidates) != 1:
             issues.append(PlanIssue(Reason.NAME_AMBIGUOUS, source_window_id=wanted.id))
         else:
             actual = candidates[0]

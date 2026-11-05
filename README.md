@@ -188,6 +188,8 @@ creation timestamps, without querying or changing desktop windows.
 `planner.py` compares two observations and returns window targets, reasons for
 skips or blocked work, monitor fallbacks, and final visibility/focus targets.
 It performs no commands.
+`app_matching.py` contains the title-rule registry for snapshot name fallback.
+See [adding app matching rules](docs/app-matching.md) for the extension steps.
 
 `storage.py` saves named observations atomically under `snapshots/`, with private,
 verified pre-restore files in `backups/` and matching results in `reports/` under

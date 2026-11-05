@@ -54,6 +54,7 @@ Use shell-free subprocess argument arrays, bounded timeouts and output, clear er
 
 ### Suggested implementation boundaries
 
+- **App matching:** `app_matching.py` exposes `restore_name_key(window)` and a registry of pure app title rules. Add rules there without changing restore planning; uniqueness and owner checks remain the planner/executor's responsibility. See [adding app matching rules](app-matching.md).
 - **Yabai adapter:** queries, commands, process execution, capability observations.
 - **Snapshot/storage:** versioned schema, session identity, atomic named saves and backups.
 - **Planner:** identity matching and a deterministic restore plan, independent of subprocesses.
