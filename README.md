@@ -47,7 +47,12 @@ and process creation identities.
 After a reboot or login change, restore defaults to a partial name fallback for
 the same user. A saved app/title pair must match exactly one window in both the
 snapshot and the current desktop, case-insensitively. Names are literal, not
-globs. Matched windows use their current process identities and restore the saved
+globs. For Code, Code - OSS, and Code - Insiders, matching uses the trailing
+workspace name after the last ` — ` instead of the whole title: `old.py — codex`
+matches `new.py — codex` or `codex`. The app must still match, and duplicate
+workspace names in either observation are ambiguous. Extension Development Host
+windows are matched separately from regular windows of the same workspace.
+Matched windows use their current process identities and restore the saved
 fullscreen/monitor/minimized targets; unmatched current windows stay untouched, including
 fullscreen windows. Missing, ambiguous, and unsupported sources are reported and
 make the restore incomplete (exit 1). Reports identify source snapshot IDs

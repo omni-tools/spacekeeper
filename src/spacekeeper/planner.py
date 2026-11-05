@@ -156,8 +156,9 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
     """Return deterministic per-window targets and final visibility/focus intent.
 
     Same-session IDs require the original owner. Stale boot/login sessions can
-    match unique literal app/title pairs to fresh identities; other windows stay
-    untouched. Different users and opt-out callers retain strict rejection.
+    match unique app/title pairs (Code uses workspace suffixes) to fresh
+    identities; other windows stay untouched. Different users and opt-out
+    callers retain strict rejection.
     """
     if saved.session != current.session:
         if fallback and saved.session.uid == current.session.uid:
@@ -214,7 +215,16 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
 def _name_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
     """A partial name restore never treats old window IDs as live references."""
     def key(window):
-        return window.app.casefold(), window.title.casefold()
+        app, title = window.app.casefold(), window.title.casefold()
+        if app in ('code', 'code - oss', 'code - insiders'):
+            # Active files change; the final title component names the workspace.
+            # Keep extension hosts distinct from normal windows of that project.
+            host = '[extension development host] '
+            prefix = host if title.startswith(host) else ''
+            workspace = title.removeprefix(prefix).rsplit(' — ', 1)[-1].strip()
+            if workspace:
+                title = prefix + workspace
+        return app, title
     wanted_windows = [w for w in saved.windows if unsupported_reason(w) != Reason.PROTECTED_WINDOW]
     sources, live = defaultdict(list), defaultdict(list)
     for window in wanted_windows:

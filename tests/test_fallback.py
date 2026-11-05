@@ -17,6 +17,76 @@ STALE = replace(SESSION, boot_uuid=str(UUID(int=2000)), login_session_id=200)
 
 
 class NameFallbackTests(unittest.TestCase):
+    def test_code_matches_trailing_workspace_despite_active_file_changes(self):
+        for app in ('Code', 'Code - OSS', 'Code - Insiders'):
+            for before, after in (('old.py — Workspace', 'new.py — WORKSPACE'),
+                                  ('Workspace', 'new.py — Workspace'),
+                                  ('old.py — Workspace', 'Workspace'),
+                                  ('file — with separator — Workspace', 'new.py — Workspace')):
+                with self.subTest(app=app, before=before, after=after):
+                    saved = observe(window(app=app, title=before, minimized=True), session=STALE)
+                    actual = window(9, app=app, title=after)
+                    plan = plan_restore(saved, observe(actual))
+                    self.assertFalse(plan.issues)
+                    self.assertEqual(plan.windows[0].source_window_id, 1)
+                    self.assertEqual(plan.windows[0].target.identity, actual.identity)
+                    self.assertTrue(plan.windows[0].target.minimized)
+
+    def test_duplicate_code_workspaces_remain_ambiguous(self):
+        scenarios = (
+            ((window(app='Code', title='one.py — Workspace'),),
+             (window(9, app='Code', title='one.py — Workspace'),
+              window(10, app='Code', title='two.py — Workspace'))),
+            ((window(app='Code', title='one.py — Workspace'),
+              window(2, app='Code', title='two.py — Workspace')),
+             (window(9, app='Code', title='one.py — Workspace'),)),
+        )
+        for sources, current in scenarios:
+            with self.subTest(sources=len(sources), current=len(current)):
+                plan = plan_restore(observe(*sources, session=STALE), observe(*current))
+                self.assertTrue(all(d.target is None for d in plan.windows))
+                self.assertTrue(all(i.reason.value == 'name_ambiguous' for i in plan.issues))
+
+    def test_workspace_matching_stays_within_the_same_code_app(self):
+        for source_app, target_app in (('Browser', 'Browser'), ('Code', 'Code - OSS')):
+            with self.subTest(source_app=source_app, target_app=target_app):
+                saved = observe(window(app=source_app, title='old.py — Workspace'), session=STALE)
+                plan = plan_restore(saved, observe(window(9, app=target_app, title='new.py — Workspace')))
+                self.assertTrue(all(d.target is None for d in plan.windows))
+                self.assertEqual(plan.issues[0].reason.value, 'name_no_match')
+
+    def test_code_extension_hosts_are_distinct_from_regular_workspaces(self):
+        saved = observe(window(app='Code', title='[Extension Development Host] old.py — Workspace'), session=STALE)
+        current = observe(window(9, app='Code', title='[Extension Development Host] new.py — Workspace'),
+                          window(10, app='Code', title='regular.py — Workspace'))
+        plan = plan_restore(saved, current)
+        self.assertFalse(plan.issues)
+        self.assertIsNotNone(plan.windows[0].target)
+        self.assertIsNone(plan.windows[1].target)
+        bare = replace(saved, windows=(replace(saved.windows[0], title='[Extension Development Host] Workspace'),))
+        self.assertEqual(plan_restore(bare, current).windows[0].target.identity, current.windows[0].identity)
+
+    def test_code_same_session_owner_changes_still_cannot_match_by_workspace(self):
+        saved = observe(window(app='Code', title='old.py — Workspace'))
+        actual = window(app='Code', title='new.py — Workspace', owner=ProcessIdentity(101, 2_000_000, 0))
+        decision = plan_restore(saved, observe(actual)).windows[0]
+        self.assertEqual(decision.reason.value, 'owner_changed')
+        self.assertIsNone(decision.target)
+
+    def test_code_workspace_match_restores_dock_state_with_fresh_owner_guards(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            saved = observe(window(app='Code', title='old.py — Workspace', minimized=True), session=STALE)
+            fake, clock = FakeYabai(window(9, app='Code', title='new.py — Workspace')), Clock()
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
+                                             timeout=1, clock=clock, sleep=clock.sleep)
+            report = coordinator.restore(saved)
+            self.assertTrue(report.complete, report)
+            self.assertTrue(fake.windows[9].minimized)
+            self.assertEqual(report.windows[0].source_window_id, 1)
+            self.assertEqual(report.windows[0].attempted_operations, ('minimize',))
+
     def test_missing_focus_monitor_does_not_leave_conflicting_visibility_targets(self):
         for old_session, ids in ((SESSION, (1, 2)), (STALE, (9, 10))):
             with self.subTest(name_fallback=old_session == STALE):

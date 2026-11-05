@@ -103,8 +103,9 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
     """Restore NAME (default: default), with name fallback for stale sessions.
 
     Same-session restores exit fullscreen for extra windows. After a reboot or
-    login change, only unique literal app/title pairs are restored; unmatched
-    current windows stay untouched. A verified backup is saved before mutations.
+    login change, unique app/title pairs are restored. Code titles match by their
+    trailing workspace name. Unmatched current windows stay untouched. A verified
+    backup is saved before mutations.
     Missing/ambiguous windows make the result incomplete (exit 1).
     """
     if backup_id is not None and name is not None:
