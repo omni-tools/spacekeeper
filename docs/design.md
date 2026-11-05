@@ -9,18 +9,18 @@ Proposed command surface (to implement):
 ```sh
 spacekeeper capture [NAME] [--force]
 spacekeeper list
-spacekeeper restore [NAME]
+spacekeeper restore [NAME] [--no-fallback]
 ```
 
 Omitting NAME selects `default`. Capture automatically replaces `default`; replacing any other existing name requires `--force`. Restore always saves a timestamped pre-restore backup before mutations. Validate names and use atomic writes so names cannot escape the storage directory and an interrupted capture cannot destroy the previous snapshot.
 
-Snapshots target surviving windows in the **same running macOS session**. Match window ID plus owning process identity, not title alone. Record enough session identity to reject stale ID reuse after a reboot/process replacement. Skip closed/reopened windows and report them; do not launch apps or recreate windows in v0. Titles are metadata, not stable identity.
+Within the same running macOS session, match window ID plus owning process identity. Skip closed/replaced owners and report them. After a reboot or login change, the default is a partial name fallback for the same effective UID: only a unique case-insensitive literal app/title pair in both observations can rebind a saved target to a current window and its fresh process identity. Missing, ambiguous, or unsupported sources are reported as incomplete. Unmatched current windows retain their placement/fullscreen. Old snapshot IDs remain source references and never select current targets. Different users are rejected; `--no-fallback` restores strict boot/login rejection. No apps/windows are launched or recreated.
 
 ### Restore behavior
 
 For windows represented by the snapshot, restore native fullscreen on/off and their saved monitor when connected. Match monitors by UUID rather than current arrangement index. If a saved monitor is disconnected, keep the window on its current monitor and restore fullscreen state there; report the fallback.
 
-**Extra windows absent from the snapshot exit fullscreen by default.** They stay open. Extra ordinary windows remain unchanged. Do not treat sticky/system/overlay windows as restore targets. Optional preserve filters, added after v0, exclude matching extra fullscreen windows from this policy. Saved windows always follow their snapshot targets.
+**In same-session restore, extra windows absent from the snapshot exit fullscreen by default.** They stay open. Extra ordinary windows remain unchanged. Do not treat sticky/system/overlay windows as restore targets. Optional preserve filters exclude matching extra fullscreen windows from this policy. In stale-session name fallback, unmatched current windows remain untouched without needing preserve filters. Matched saved windows follow their snapshot targets.
 
 Use the verified monitor-first sequence for a fullscreen window on the wrong monitor:
 

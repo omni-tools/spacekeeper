@@ -95,13 +95,17 @@ def list_snapshots(ctx: click.Context) -> None:
 @click.option('--preserve', 'preserve_rules', type=(str, str), multiple=True, metavar='APP_GLOB TITLE_GLOB',
               help='Keep matching extra fullscreen windows untouched; repeat for more rules. Use * for any title.')
 @click.option('--no-preserve', is_flag=True, help='Ignore configured preserve rules for this restore.')
+@click.option('--no-fallback', is_flag=True,
+              help='Reject stale boot/login snapshots instead of partially matching app and window names.')
 @click.pass_context
-def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserve_rules, no_preserve: bool) -> None:
-    """Restore NAME (default: default) in the same running session.
+def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserve_rules, no_preserve: bool,
+            no_fallback: bool) -> None:
+    """Restore NAME (default: default), with name fallback for stale sessions.
 
-    Extra fullscreen windows absent from the snapshot exit fullscreen.
-    Extra ordinary windows stay open and unchanged. A verified backup is
-    saved before mutations. Incomplete restores exit with code 1.
+    Same-session restores exit fullscreen for extra windows. After a reboot or
+    login change, only unique literal app/title pairs are restored; unmatched
+    current windows stay untouched. A verified backup is saved before mutations.
+    Missing/ambiguous windows make the result incomplete (exit 1).
     """
     if backup_id is not None and name is not None:
         raise click.UsageError('Choose a snapshot name or --backup, not both.')
@@ -115,12 +119,18 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
     with operational_errors():
         store = SnapshotStore(settings.state_dir)
         saved = store.load_backup(backup_id) if backup_id is not None else store.load(name or 'default')
-        click.echo('Unmatched extra fullscreen windows absent from this snapshot will exit fullscreen.')
-        if preserve:
-            click.echo(f'Preserve filters: {len(preserve)} rule(s).')
+        def explain_plan(plan):
+            if plan.name_fallback:
+                click.echo('Saved session is stale; using partial app/title name fallback. '
+                           'Unmatched current windows will stay untouched.')
+            elif plan.accepted:
+                click.echo('Unmatched extra fullscreen windows absent from this snapshot will exit fullscreen.')
+                if preserve:
+                    click.echo(f'Preserve filters: {len(preserve)} rule(s).')
         coordinator = RestoreCoordinator(desktop(settings), store, timeout=settings.timeout,
-                                         on_backup=lambda path: click.echo(f'Pre-restore backup: {path}'))
-        report = coordinator.restore(saved, preserve=preserve)
+                                         on_backup=lambda path: click.echo(f'Pre-restore backup: {path}'),
+                                         on_plan=explain_plan)
+        report = coordinator.restore(saved, preserve=preserve, fallback=not no_fallback)
         emit_report(ctx, report)
 
 
@@ -129,12 +139,19 @@ def emit_report(ctx, report):
     summary = ', '.join(f'{count} {status}' for status, count in sorted(counts.items())) or 'no windows'
     click.echo(('Restore complete: ' if report.complete else 'Restore incomplete: ') + summary)
     for window in report.windows:
+        if window.source_window_id is not None:
+            click.echo(f'Window {window.window_id}: matched snapshot window {window.source_window_id} by app/title.')
         if window.monitor_fallback:
             click.echo(f'Window {window.window_id}: saved monitor disconnected; using its current monitor.')
         if window.status not in ('restored', 'unchanged', 'excluded'):
             click.echo(f'Window {window.window_id}: {window.status} ({window.reason}).')
     for issue in report.issues:
-        click.echo(f'{issue.scope}: {issue.reason}' + (f' (window {issue.window_id})' if issue.window_id is not None else ''))
+        locations = []
+        if issue.source_window_id is not None:
+            locations.append(f'snapshot window {issue.source_window_id}')
+        if issue.window_id is not None:
+            locations.append(f'window {issue.window_id}')
+        click.echo(f'{issue.scope}: {issue.reason}' + (' (' + ', '.join(locations) + ')' if locations else ''))
     click.echo(f'Report: {report.report_path}')
     if not report.complete:
         ctx.exit(1)

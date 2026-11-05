@@ -29,7 +29,7 @@ class PlannerTests(unittest.TestCase):
                     replace(SESSION, uid=502), replace(SESSION, login_session_id=101))
         for session in sessions:
             with self.subTest(session=session):
-                plan = plan_restore(saved, observe(window(), window(2, fullscreen=True), session=session))
+                plan = plan_restore(saved, observe(window(), window(2, fullscreen=True), session=session), fallback=False)
                 self.assertFalse(plan.accepted)
                 self.assertEqual(plan.windows, ())
                 self.assertEqual(plan.visible, ())

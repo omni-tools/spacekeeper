@@ -75,7 +75,7 @@ class CliTests(unittest.TestCase):
         def coordinator(desktop, store, **options):
             return RestoreCoordinator(desktop, store, lock_path=self.root / 'lock/restore.lock', timeout=1,
                                       poll_interval=0.1, clock=self.clock, sleep=self.clock.sleep,
-                                      on_backup=options.get('on_backup'))
+                                      on_backup=options.get('on_backup'), on_plan=options.get('on_plan'))
         factory = patch('spacekeeper.cli.RestoreCoordinator', side_effect=coordinator)
         factory.start()
         self.addCleanup(factory.stop)
@@ -135,11 +135,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(list((self.state / 'backups').glob('*.json'))), 1)
         self.assertEqual(len(list((self.state / 'reports').glob('*.json'))), 1)
 
-    def test_old_session_is_rejected_without_mutation(self):
+    def test_no_fallback_rejects_old_session_without_mutation(self):
         SnapshotStore(self.state).save(observe(window(), session=replace(SESSION, login_session_id=101)))
-        result = self.invoke('restore')
+        result = self.invoke('restore', '--no-fallback')
         self.assertEqual(result.exit_code, 1)
         self.assertIn('session_mismatch', result.output)
+        self.assertEqual(self.device.commands, [])
+
+    def test_old_session_uses_default_name_fallback_with_current_window_ids(self):
+        saved = observe(window(fullscreen=True, display=B, focused=True),
+                        session=replace(SESSION, login_session_id=101))
+        SnapshotStore(self.state).save(saved)
+        extra = window(1, app='Other', fullscreen=True)
+        self.device.windows = {1: extra, 9: window(9, focused=True)}
+        result = self.invoke('restore')
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn('using partial app/title name fallback', result.output)
+        self.assertIn('Window 9: matched snapshot window 1', result.output)
+        self.assertNotIn('will exit fullscreen', result.output)
+        self.assertEqual(self.device.windows[1], extra)
+        self.assertEqual((self.device.windows[9].display_uuid, self.device.windows[9].fullscreen), (B, True))
+        report = json.loads(next((self.state/'reports').glob('*.json')).read_text())
+        self.assertTrue(report['name_fallback'])
+        self.assertEqual(next(w for w in report['windows'] if w['window_id'] == 9)['source_window_id'], 1)
+
+    def test_partial_name_fallback_reports_missing_sources_and_exits_one(self):
+        SnapshotStore(self.state).save(observe(window(title='Missing title'),
+                                              session=replace(SESSION, login_session_id=101)))
+        result = self.invoke('restore')
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn('name_no_match (snapshot window 1)', result.output)
         self.assertEqual(self.device.commands, [])
 
     def test_concurrent_restore_reports_lock_failure(self):

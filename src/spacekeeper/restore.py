@@ -67,6 +67,7 @@ class WindowOutcome:
     reason: str
     monitor_fallback: bool = False
     attempted_operations: tuple[str, ...] = ()
+    source_window_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,7 @@ class RestoreIssue:
     reason: str
     window_id: int | None = None
     display_uuid: str | None = None
+    source_window_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,7 @@ class RestoreReport:
     report_path: str
     windows: tuple[WindowOutcome, ...]
     issues: tuple[RestoreIssue, ...]
+    name_fallback: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -93,10 +96,12 @@ class RestoreCoordinator:
     def __init__(self, desktop: Desktop, store: SnapshotStore, *, lock_path: Path | None = None,
                  timeout: float = 12, poll_interval: float = 0.2,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
-                 on_backup: Callable[[Path], None] | None = None):
+                 on_backup: Callable[[Path], None] | None = None,
+                 on_plan: Callable[[RestorePlan], None] | None = None):
         self.desktop, self.store, self.lock_path = desktop, store, lock_path
         self.timeout, self.interval, self.clock, self.sleep = timeout, poll_interval, clock, sleep
         self.on_backup = on_backup
+        self.on_plan = on_plan
         self.transitions = WindowTransitions(desktop, transition_timeout=timeout, poll_interval=poll_interval,
                                              clock=clock, sleep=sleep)
 
@@ -139,8 +144,8 @@ class RestoreCoordinator:
             self.sleep(min(self.interval, max(0, deadline - self.clock())))
         raise YabaiError(YabaiFailure.TIMEOUT, "Focus/visibility restoration was not confirmed.")
 
-    def restore(self, saved: Snapshot, *, preserve: tuple[WindowRule, ...] = ()) -> RestoreReport:
-        return self._restore(saved, lambda before: plan_restore(saved, before, preserve=preserve))
+    def restore(self, saved: Snapshot, *, preserve: tuple[WindowRule, ...] = (), fallback: bool = True) -> RestoreReport:
+        return self._restore(saved, lambda before: plan_restore(saved, before, preserve=preserve, fallback=fallback))
 
     def apply_preset(self, preset: 'Preset') -> RestoreReport:
         return self._restore(None, preset.plan)
@@ -152,8 +157,11 @@ class RestoreCoordinator:
             if self.on_backup is not None:
                 self.on_backup(backup)
             plan = build_plan(before)
+            if self.on_plan is not None:
+                self.on_plan(plan)
             saved = before if saved is None else saved
-            outcomes, issues = [], [RestoreIssue("planning", item.reason.value, item.window_id, item.display_uuid)
+            outcomes, issues = [], [RestoreIssue("planning", item.reason.value, item.window_id, item.display_uuid,
+                                                item.source_window_id)
                                     for item in plan.issues]
             session_changed = False
             saved_ids = {window.id for window in saved.windows}
@@ -163,19 +171,20 @@ class RestoreCoordinator:
                 for decision in plan.windows:
                     if session_changed:
                         outcomes.append(WindowOutcome(decision.window_id, "failed", "session_changed",
-                                                      decision.monitor_fallback))
+                                                      decision.monitor_fallback, source_window_id=decision.source_window_id))
                     elif decision.status == DecisionStatus.PLANNED and decision.target is not None:
-                        result = self.transitions.apply(decision.target, saved.session)
+                        result = self.transitions.apply(decision.target, before.session)
                         status = "restored" if result.status == TransitionStatus.VERIFIED else result.status.value
                         outcomes.append(WindowOutcome(decision.window_id, status, result.reason or decision.reason.value,
-                                                      decision.monitor_fallback, result.attempted_operations))
+                                                      decision.monitor_fallback, result.attempted_operations,
+                                                      decision.source_window_id))
                         session_changed = result.reason == YabaiFailure.SESSION_CHANGED
                     else:
                         expected_exclusion = (decision.reason == Reason.PROTECTED_WINDOW and
                                               (decision.window_id in protected_saved or decision.window_id not in saved_ids))
                         status = "excluded" if expected_exclusion else decision.status.value
                         outcomes.append(WindowOutcome(decision.window_id, status, decision.reason.value,
-                                                      decision.monitor_fallback))
+                                                      decision.monitor_fallback, source_window_id=decision.source_window_id))
 
                 eligible = {outcome.window_id for outcome in outcomes if outcome.status in ("restored", "unchanged")}
                 already_matches = (not any(d.status == DecisionStatus.PLANNED for d in plan.windows) and
@@ -189,7 +198,7 @@ class RestoreCoordinator:
                         if target.identity.window_id not in eligible:
                             continue
                         try:
-                            self._focus(target.identity, saved.session, target.display_uuid)
+                            self._focus(target.identity, before.session, target.display_uuid)
                             last_focused = target.identity
                         except (YabaiError, IdentityUnavailable) as error:
                             last_focused = None
@@ -201,7 +210,7 @@ class RestoreCoordinator:
                     if (not session_changed and plan.focus is not None and plan.focus.window_id in eligible and
                             last_focused != plan.focus):
                         try:
-                            self._focus(plan.focus, saved.session, None)
+                            self._focus(plan.focus, before.session, None)
                         except (YabaiError, IdentityUnavailable) as error:
                             issues.append(RestoreIssue("focus", _reason(error), plan.focus.window_id))
 
@@ -228,7 +237,7 @@ class RestoreCoordinator:
                         else outcome for outcome in outcomes]
             complete = plan.accepted and not issues and all(o.status in ("restored", "unchanged", "excluded") for o in outcomes)
             report = RestoreReport(complete, str(backup), str(self.store.root / "reports" / backup.name),
-                                   tuple(outcomes), tuple(issues))
+                                   tuple(outcomes), tuple(issues), plan.name_fallback)
             try:
                 self.store.report(backup, report.to_dict())
             except Exception as error:
@@ -250,13 +259,15 @@ class RestoreCoordinator:
                     issues.append(RestoreIssue("verification", "missing_or_changed_owner", decision.window_id))
                 elif (window.display_uuid, window.fullscreen) != (target.display_uuid, target.fullscreen):
                     issues.append(RestoreIssue("verification", "window_target_mismatch", decision.window_id))
-            elif decision.reason in (Reason.EXTRA_ORDINARY, Reason.PRESERVED, Reason.PRESET_UNMATCHED):
+            elif decision.reason in (Reason.EXTRA_ORDINARY, Reason.PRESERVED, Reason.PRESET_UNMATCHED,
+                                     Reason.FALLBACK_UNMATCHED):
                 previous = original[decision.window_id]
                 if window is None or window.identity != previous.identity or any(
                     getattr(window, key) != getattr(previous, key) for key in ("fullscreen", "display_uuid", "space_id", "frame")
                 ):
                     reason = {Reason.EXTRA_ORDINARY: 'extra_ordinary_changed', Reason.PRESERVED: 'preserved_window_changed',
-                              Reason.PRESET_UNMATCHED: 'unmatched_window_changed'}[decision.reason]
+                              Reason.PRESET_UNMATCHED: 'unmatched_window_changed',
+                              Reason.FALLBACK_UNMATCHED: 'fallback_unmatched_changed'}[decision.reason]
                     issues.append(RestoreIssue("verification", reason, decision.window_id))
         for target in plan.visible:
             window = current.get(target.identity.window_id)

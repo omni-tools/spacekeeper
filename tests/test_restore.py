@@ -85,7 +85,7 @@ class RestoreTests(unittest.TestCase):
     def test_rejected_session_still_has_backup_and_report_but_no_mutations(self):
         desktop = FakeYabai(window())
         saved = observe(window(fullscreen=True), session=replace(SESSION, login_session_id=101))
-        report = self.coordinator(desktop).restore(saved)
+        report = self.coordinator(desktop).restore(saved, fallback=False)
         self.assertFalse(report.complete)
         self.assertEqual(report.issues[0].reason, 'session_mismatch')
         self.assertTrue(Path(report.backup_path).is_file())

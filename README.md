@@ -39,10 +39,28 @@ uv run spacekeeper list
 uv run spacekeeper restore work        # Changes the desktop.
 ```
 
-**Restore exits fullscreen for extra windows absent from the snapshot.** Extra
-ordinary windows stay open and unchanged. Capture and list do not change desktop
-windows. Snapshots match surviving windows in the same boot/login session; they
-do not reopen closed windows or restore Space ordering or ordinary window frames.
+**Same-session restore exits fullscreen for extra windows absent from the snapshot.**
+Extra ordinary windows stay open and unchanged. Capture and list do not change
+desktop windows. Within a running boot/login session, matching uses window IDs
+and process creation identities.
+
+After a reboot or login change, restore defaults to a partial name fallback for
+the same user. A saved app/title pair must match exactly one window in both the
+snapshot and the current desktop, case-insensitively. Names are literal, not
+globs. Matched windows use their current process identities and restore the saved
+fullscreen/monitor targets; unmatched current windows stay untouched, including
+fullscreen windows. Missing, ambiguous, and unsupported sources are reported and
+make the restore incomplete (exit 1). Reports identify source snapshot IDs
+separately from current window IDs. Another user's snapshot is still rejected.
+
+```sh
+spacekeeper restore alpha                # Partial name fallback if the session is stale.
+spacekeeper restore alpha --no-fallback  # Require the original boot/login session.
+```
+
+Same-session closed/replaced owners remain skipped; name fallback is for stale
+boot/login sessions. Restore does not reopen apps/windows or restore Space
+ordering or ordinary window frames. `--no-fallback` also applies with `--backup`.
 
 Snapshot names are 1–64 ASCII letters, digits, dots, underscores, or hyphens,
 starting with a letter or digit. The default state directory is
