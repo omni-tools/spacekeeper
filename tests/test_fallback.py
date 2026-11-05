@@ -17,6 +17,31 @@ STALE = replace(SESSION, boot_uuid=str(UUID(int=2000)), login_session_id=200)
 
 
 class NameFallbackTests(unittest.TestCase):
+    def test_missing_focus_monitor_does_not_leave_conflicting_visibility_targets(self):
+        for old_session, ids in ((SESSION, (1, 2)), (STALE, (9, 10))):
+            with self.subTest(name_fallback=old_session == STALE):
+                saved = observe(window(1, title='Left'),
+                                window(2, title='Right', display=B, fullscreen=True, focused=True), session=old_session)
+                current = observe(window(ids[0], title='Left', focused=True),
+                                  window(ids[1], title='Right', fullscreen=True), displays=DISPLAYS[:1])
+                plan = plan_restore(saved, current)
+                self.assertEqual(plan.focus.window_id, ids[1])
+                self.assertEqual([(v.display_uuid, v.identity.window_id) for v in plan.visible], [(A, ids[1])])
+
+    def test_collapsed_monitor_restore_can_verify_focus_and_visibility_together(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            saved = observe(window(1, title='Left'),
+                            window(2, title='Right', display=B, fullscreen=True, focused=True), session=STALE)
+            fake, clock = FakeYabai(window(9, title='Left', focused=True),
+                                    window(10, title='Right', fullscreen=True)), Clock()
+            fake.displays, fake.normal_displays = DISPLAYS[:1], (A,)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
+                                             timeout=1, clock=clock, sleep=clock.sleep)
+            report = coordinator.restore(saved)
+            self.assertTrue(report.complete, report)
+            self.assertTrue(fake.windows[10].focused)
     def test_stale_names_rebind_current_owners_and_never_reuse_old_ids(self):
         saved = observe(window(fullscreen=True, display=B, focused=True), session=STALE)
         actual = window(9, app='SYNTHETIC EDITOR', title='SYNTHETIC DOCUMENT')

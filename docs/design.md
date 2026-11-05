@@ -33,7 +33,7 @@ The same sequence applies when entering fullscreen on a connected saved monitor.
 
 When turning fullscreen off, use the existing normal desktop; v0 does not promise exact Space identity, desktop index, or frame coordinates. Native fullscreen creates/removes Spaces, so their IDs and Mission Control indexes may change. Re-resolve identities before each mutation, and poll state with bounded waits instead of trusting command exit status or fixed delays alone.
 
-Restore the saved visible window on each available monitor and final focus last where surviving identities permit it. Verify final state and report unsupported, skipped, failed, and successfully restored items separately. Missing SA is expected in v0: there is no Space-order promise and no automatic installation, privilege change, SIP change, or Recovery operation.
+Restore the saved visible window on each available monitor and final focus last where surviving identities permit it. If the final focused window falls back from a disconnected monitor, its visibility takes precedence on its current monitor; do not require a different saved Space to remain visible on the same monitor. Verify final state and report unsupported, skipped, failed, and successfully restored items separately. Missing SA is expected in v0: there is no Space-order promise and no automatic installation, privilege change, SIP change, or Recovery operation.
 
 ### Execution and storage
 

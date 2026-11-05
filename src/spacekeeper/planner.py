@@ -136,6 +136,13 @@ def _views(saved: Snapshot, targets: dict[int, WindowTarget | None], connected: 
     focus_target = targets.get(focused.id) if focused is not None else None
     if focused is not None and focus_target is None:
         unavailable(Reason.FOCUS_UNAVAILABLE, focused.id)
+    if focus_target is not None and focused.display_uuid not in connected:
+        # A window from a missing monitor now shares its fallback monitor with
+        # that monitor's saved visible window. Final focus takes precedence;
+        # two different fullscreen/desktop Spaces cannot both be visible there.
+        visible = [target for target in visible if target.display_uuid != focus_target.display_uuid]
+        visible.append(VisibleTarget(focus_target.display_uuid, focus_target.identity))
+        visible.sort(key=lambda target: target.display_uuid)
     return tuple(visible), focus_target.identity if focus_target is not None else None
 
 

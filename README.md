@@ -52,6 +52,8 @@ fullscreen/monitor targets; unmatched current windows stay untouched, including
 fullscreen windows. Missing, ambiguous, and unsupported sources are reported and
 make the restore incomplete (exit 1). Reports identify source snapshot IDs
 separately from current window IDs. Another user's snapshot is still rejected.
+If a disconnected monitor sends the final focused window onto another monitor,
+that window takes precedence over the other monitor's saved visible window.
 
 ```sh
 spacekeeper restore alpha                # Partial name fallback if the session is stale.
