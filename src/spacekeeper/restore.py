@@ -68,6 +68,7 @@ class WindowOutcome:
     monitor_fallback: bool = False
     attempted_operations: tuple[str, ...] = ()
     source_window_id: int | None = None
+    match_method: str | None = None
 
 
 @dataclass(frozen=True)
@@ -172,20 +173,22 @@ class RestoreCoordinator:
                 for decision in plan.windows:
                     if session_changed:
                         outcomes.append(WindowOutcome(decision.window_id, "failed", "session_changed",
-                                                      decision.monitor_fallback, source_window_id=decision.source_window_id))
+                                                      decision.monitor_fallback, source_window_id=decision.source_window_id,
+                                                      match_method=decision.match_method))
                     elif decision.status == DecisionStatus.PLANNED and decision.target is not None:
                         result = self.transitions.apply(decision.target, before.session)
                         status = "restored" if result.status == TransitionStatus.VERIFIED else result.status.value
                         outcomes.append(WindowOutcome(decision.window_id, status, result.reason or decision.reason.value,
                                                       decision.monitor_fallback, result.attempted_operations,
-                                                      decision.source_window_id))
+                                                      decision.source_window_id, decision.match_method))
                         session_changed = result.reason == YabaiFailure.SESSION_CHANGED
                     else:
                         expected_exclusion = (decision.reason == Reason.PROTECTED_WINDOW and
                                               (decision.window_id in protected_saved or decision.window_id not in saved_ids))
                         status = "excluded" if expected_exclusion else decision.status.value
                         outcomes.append(WindowOutcome(decision.window_id, status, decision.reason.value,
-                                                      decision.monitor_fallback, source_window_id=decision.source_window_id))
+                                                      decision.monitor_fallback, source_window_id=decision.source_window_id,
+                                                      match_method=decision.match_method))
 
                 eligible = {outcome.window_id for outcome in outcomes if outcome.status in ("restored", "unchanged")}
                 already_matches = (not any(d.status == DecisionStatus.PLANNED for d in plan.windows) and

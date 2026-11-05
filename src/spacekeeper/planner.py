@@ -5,7 +5,7 @@ Spaces before each mutation. An accepted plan is not evidence of restoration.
 """
 
 from dataclasses import asdict, dataclass
-from collections import defaultdict
+from collections import Counter, defaultdict
 from enum import StrEnum
 
 from spacekeeper.app_matching import restore_name_key
@@ -61,6 +61,7 @@ class WindowDecision:
     target: WindowTarget | None = None
     monitor_fallback: bool = False
     source_window_id: int | None = None
+    match_method: str | None = None
 
 
 @dataclass(frozen=True)
@@ -104,19 +105,19 @@ def unsupported_reason(window: Window, *, allow_minimized: bool = False) -> Reas
 
 
 def _window_target(wanted: Window, actual: Window, connected: set[str], normal_displays: set[str],
-                   *, source_window_id: int | None = None) -> WindowDecision:
+                   *, source_window_id: int | None = None, match_method: str | None = None) -> WindowDecision:
     fallback = wanted.display_uuid not in connected
     destination = actual.display_uuid if fallback else wanted.display_uuid
     assert destination is not None and actual.identity is not None
     target = WindowTarget(actual.identity, destination, wanted.fullscreen, wanted.minimized)
     if actual.display_uuid != destination and destination not in normal_displays:
         return WindowDecision(actual.id, DecisionStatus.BLOCKED, Reason.NO_NORMAL_DESTINATION,
-                              monitor_fallback=fallback, source_window_id=source_window_id)
+                              monitor_fallback=fallback, source_window_id=source_window_id, match_method=match_method)
     status = (DecisionStatus.UNCHANGED if (actual.display_uuid, actual.fullscreen, actual.minimized) ==
               (destination, wanted.fullscreen, wanted.minimized)
               else DecisionStatus.PLANNED)
     reason = Reason.ALREADY_MATCHES if status == DecisionStatus.UNCHANGED else Reason.RESTORE_SAVED
-    return WindowDecision(actual.id, status, reason, target, fallback, source_window_id)
+    return WindowDecision(actual.id, status, reason, target, fallback, source_window_id, match_method)
 
 
 def _views(saved: Snapshot, targets: dict[int, WindowTarget | None], connected: set[str],
@@ -157,9 +158,10 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
     """Return deterministic per-window targets and final visibility/focus intent.
 
     Same-session IDs require the original owner. Stale boot/login sessions can
-    match unique app/title pairs (Code uses workspace suffixes) to fresh
-    identities; other windows stay untouched. Different users and opt-out
-    callers retain strict rejection.
+    prefer unique app/title pairs (Code uses workspace suffixes), then match
+    one-window apps regardless of title. Each match binds a fresh identity;
+    other windows stay untouched. Different users and opt-out callers retain
+    strict rejection.
     """
     if saved.session != current.session:
         if fallback and saved.session.uid == current.session.uid:
@@ -216,11 +218,15 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
 def _name_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
     """A partial name restore never treats old window IDs as live references."""
     wanted_windows = [w for w in saved.windows if unsupported_reason(w) != Reason.PROTECTED_WINDOW]
-    sources, live = defaultdict(list), defaultdict(list)
+    sources, live, live_apps = defaultdict(list), defaultdict(list), defaultdict(list)
+    # Count all observed windows, not just unmatched or supported ones. Hidden
+    # windows or incomplete metadata must not make a multiwindow app look unique.
+    source_app_counts = Counter(w.app.casefold() for w in saved.windows)
     for window in wanted_windows:
         sources[restore_name_key(window)].append(window)
     for window in current.windows:
         live[restore_name_key(window)].append(window)
+        live_apps[window.app.casefold()].append(window)
     connected = {d.uuid for d in current.displays}
     normal_displays = {s.display_uuid for s in current.spaces if not s.fullscreen}
     decisions, targets, issues = {}, {}, []
@@ -229,10 +235,15 @@ def _name_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
         if unsupported is not None:
             issues.append(PlanIssue(unsupported, source_window_id=wanted.id))
             continue
-        candidates = live[restore_name_key(wanted)]
+        key = restore_name_key(wanted)
+        candidates = live[key]
+        match_method = 'app_title'
+        if not candidates and source_app_counts[key[0]] == 1 and len(live_apps[key[0]]) == 1:
+            candidates = live_apps[key[0]]
+            match_method = 'single_window_app'
         if not candidates:
             issues.append(PlanIssue(Reason.NAME_NO_MATCH, source_window_id=wanted.id))
-        elif len(sources[restore_name_key(wanted)]) != 1 or len(candidates) != 1:
+        elif len(sources[key]) != 1 or len(candidates) != 1:
             issues.append(PlanIssue(Reason.NAME_AMBIGUOUS, source_window_id=wanted.id))
         else:
             actual = candidates[0]
@@ -240,7 +251,8 @@ def _name_restore(saved: Snapshot, current: Snapshot) -> RestorePlan:
             if unsupported is not None:
                 issues.append(PlanIssue(unsupported, actual.id, source_window_id=wanted.id))
                 continue
-            decision = _window_target(wanted, actual, connected, normal_displays, source_window_id=wanted.id)
+            decision = _window_target(wanted, actual, connected, normal_displays,
+                                      source_window_id=wanted.id, match_method=match_method)
             decisions[actual.id] = decision
             targets[wanted.id] = decision.target
     for window in current.windows:

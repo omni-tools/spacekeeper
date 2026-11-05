@@ -150,7 +150,7 @@ class CliTests(unittest.TestCase):
         self.device.windows = {1: extra, 9: window(9, focused=True)}
         result = self.invoke('restore')
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn('using partial app/title name fallback', result.output)
+        self.assertIn('using partial name fallback', result.output)
         self.assertIn('Window 9: matched snapshot window 1', result.output)
         self.assertNotIn('will exit fullscreen', result.output)
         self.assertEqual(self.device.windows[1], extra)
@@ -162,10 +162,21 @@ class CliTests(unittest.TestCase):
     def test_partial_name_fallback_reports_missing_sources_and_exits_one(self):
         SnapshotStore(self.state).save(observe(window(title='Missing title'),
                                               session=replace(SESSION, login_session_id=101)))
+        self.device.windows[2] = window(2, title='Another window')
         result = self.invoke('restore')
         self.assertEqual(result.exit_code, 1, result.output)
         self.assertIn('name_no_match (snapshot window 1)', result.output)
         self.assertEqual(self.device.commands, [])
+
+    def test_single_window_app_fallback_is_explicit_in_stdout_and_report(self):
+        SnapshotStore(self.state).save(observe(window(title='Old title', minimized=True),
+                                              session=replace(SESSION, login_session_id=101)))
+        result = self.invoke('restore')
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn('by single-window app fallback.', result.output)
+        self.assertTrue(self.device.windows[1].minimized)
+        report = json.loads(next((self.state/'reports').glob('*.json')).read_text())
+        self.assertEqual(report['windows'][0]['match_method'], 'single_window_app')
 
     def test_concurrent_restore_reports_lock_failure(self):
         SnapshotStore(self.state).save(observe(window()))

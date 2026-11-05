@@ -51,7 +51,8 @@ class NameFallbackTests(unittest.TestCase):
         for source_app, target_app in (('Browser', 'Browser'), ('Code', 'Code - OSS')):
             with self.subTest(source_app=source_app, target_app=target_app):
                 saved = observe(window(app=source_app, title='old.py — Workspace'), session=STALE)
-                plan = plan_restore(saved, observe(window(9, app=target_app, title='new.py — Workspace')))
+                plan = plan_restore(saved, observe(window(9, app=target_app, title='new.py — Workspace'),
+                                                   window(10, app=target_app, title='Another workspace')))
                 self.assertTrue(all(d.target is None for d in plan.windows))
                 self.assertEqual(plan.issues[0].reason.value, 'name_no_match')
 
@@ -132,7 +133,8 @@ class NameFallbackTests(unittest.TestCase):
 
     def test_missing_and_ambiguous_names_are_partial_without_guessing(self):
         scenarios = (
-            (observe(window(), session=STALE), observe(window(9, title='Different')), 'name_no_match'),
+            (observe(window(), session=STALE),
+             observe(window(9, title='Different'), window(10, title='Another')), 'name_no_match'),
             (observe(window(), window(2), session=STALE), observe(window(9)), 'name_ambiguous'),
             (observe(window(), session=STALE), observe(window(9), window(10)), 'name_ambiguous'),
             (observe(window(), session=STALE), observe(window(9), window(10, hidden=True)), 'name_ambiguous'),
@@ -153,7 +155,7 @@ class NameFallbackTests(unittest.TestCase):
 
     def test_titles_are_literal_names_not_glob_patterns(self):
         saved = observe(window(title='File*.txt'), session=STALE)
-        missing = plan_restore(saved, observe(window(9, title='FileOne.txt')))
+        missing = plan_restore(saved, observe(window(9, title='FileOne.txt'), window(10, title='Other')))
         self.assertTrue(any(i.reason.value == 'name_no_match' for i in missing.issues))
         matched = plan_restore(saved, observe(window(9, title='FILE*.TXT')))
         self.assertIsNotNone(matched.windows[0].target)

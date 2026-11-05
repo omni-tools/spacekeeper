@@ -3,9 +3,13 @@
 Stale-session snapshot restore calls `restore_name_key(window)` from
 [`app_matching.py`](../src/spacekeeper/app_matching.py) for saved and current
 windows. The function case-folds app names and titles, then applies a registered
-title rule. Unregistered apps keep their full titles. The planner requires a
-unique key in both observations and binds the result to its current process
-identity before any commands.
+title rule. Unregistered apps keep their full titles. Title matching requires a
+unique key in both observations. If no title match exists, the planner can match
+an app with exactly one saved and one current window regardless of title. It
+counts all observed windows for that app, including hidden or unsupported ones;
+one unmatched remainder does not qualify. All matches bind the current process
+identity before any commands, with the method recorded as `app_title` or
+`single_window_app` in plans and reports.
 
 To add an app, write a pure title function in that file and add it to
 `APP_TITLE_RULES` under the case-folded app name. For example, an app whose titles

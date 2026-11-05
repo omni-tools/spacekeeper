@@ -103,8 +103,9 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
     """Restore NAME (default: default), with name fallback for stale sessions.
 
     Same-session restores exit fullscreen for extra windows. After a reboot or
-    login change, unique app/title pairs are restored. Code titles match by their
-    trailing workspace name. Unmatched current windows stay untouched. A verified
+    login change, unique app/title pairs are preferred. Code titles match by their
+    trailing workspace name. Apps with one saved and one current window can match
+    regardless of title. Unmatched current windows stay untouched. A verified
     backup is saved before mutations.
     Missing/ambiguous windows make the result incomplete (exit 1).
     """
@@ -122,7 +123,8 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
         saved = store.load_backup(backup_id) if backup_id is not None else store.load(name or 'default')
         def explain_plan(plan):
             if plan.name_fallback:
-                click.echo('Saved session is stale; using partial app/title name fallback. '
+                click.echo('Saved session is stale; using partial name fallback. '
+                           'Single-window apps may match regardless of title. '
                            'Unmatched current windows will stay untouched.')
             elif plan.accepted:
                 click.echo('Unmatched extra fullscreen windows absent from this snapshot will exit fullscreen.')
@@ -141,7 +143,8 @@ def emit_report(ctx, report):
     click.echo(('Restore complete: ' if report.complete else 'Restore incomplete: ') + summary)
     for window in report.windows:
         if window.source_window_id is not None:
-            click.echo(f'Window {window.window_id}: matched snapshot window {window.source_window_id} by app/title.')
+            method = 'single-window app fallback' if window.match_method == 'single_window_app' else 'app/title'
+            click.echo(f'Window {window.window_id}: matched snapshot window {window.source_window_id} by {method}.')
         if window.monitor_fallback:
             click.echo(f'Window {window.window_id}: saved monitor disconnected; using its current monitor.')
         if window.status not in ('restored', 'unchanged', 'excluded'):

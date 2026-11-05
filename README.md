@@ -45,13 +45,18 @@ desktop windows. Within a running boot/login session, matching uses window IDs
 and process creation identities.
 
 After a reboot or login change, restore defaults to a partial name fallback for
-the same user. A saved app/title pair must match exactly one window in both the
-snapshot and the current desktop, case-insensitively. Names are literal, not
+the same user. Matching first looks for an app/title pair that identifies exactly
+one window in both the snapshot and the current desktop, case-insensitively. Names are literal, not
 globs. For Code, Code - OSS, and Code - Insiders, matching uses the trailing
 workspace name after the last ` — ` instead of the whole title: `old.py — codex`
 matches `new.py — codex` or `codex`. The app must still match, and duplicate
-workspace names in either observation are ambiguous. Extension Development Host
-windows are matched separately from regular windows of the same workspace.
+workspace names in either observation are ambiguous. For title matching,
+Extension Development Host windows are separate from regular workspace windows.
+If no title match exists, an app with exactly one saved window and one current
+window matches regardless of title. This counts all observed windows for that
+app, including hidden or unsupported ones; one unmatched remainder of a
+multiwindow app does not qualify. The app name and current ownership must still
+match. Reports distinguish `app_title` and `single_window_app` match methods.
 Matched windows use their current process identities and restore the saved
 fullscreen/monitor/minimized targets; unmatched current windows stay untouched, including
 fullscreen windows. Missing, ambiguous, and unsupported sources are reported and

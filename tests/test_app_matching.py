@@ -14,9 +14,10 @@ def document_title(title):
 class AppMatchingTests(unittest.TestCase):
     def test_registering_a_title_rule_is_sufficient_for_restore_planning(self):
         saved = observe(window(app='Synthetic Viewer', title='Report | page 1', minimized=True),
+                        window(2, app='Synthetic Viewer', title='Appendix | page 1'),
                         session=replace(SESSION, login_session_id=200))
         actual = window(9, app='SYNTHETIC VIEWER', title='REPORT | page 2')
-        current = observe(actual)
+        current = observe(actual, window(10, app='Synthetic Viewer', title='Appendix | page 2'))
         self.assertTrue(all(d.target is None for d in plan_restore(saved, current).windows))
         with patch.dict(APP_TITLE_RULES, {'synthetic viewer': document_title}):
             plan = plan_restore(saved, current)
