@@ -101,10 +101,11 @@ def list_snapshots(ctx: click.Context) -> None:
 @click.option('--no-preserve', is_flag=True, help='Ignore configured preserve rules for this restore.')
 @click.option('--no-fallback', is_flag=True,
               help='Reject stale boot/login snapshots instead of partially matching app and window names.')
+@click.option('--no-minimize', is_flag=True, help='Leave windows saved as minimized untouched.')
 @click.option('-v', '--verbose', is_flag=True, help='Show backup, matching, verification, and report details.')
 @click.pass_context
 def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserve_rules, no_preserve: bool,
-            no_fallback: bool, verbose: bool) -> None:
+            no_fallback: bool, no_minimize: bool, verbose: bool) -> None:
     """Restore NAME (default: default), with name fallback for stale sessions.
 
     Same-session restores exit fullscreen for extra windows. After a reboot or
@@ -128,6 +129,8 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
         store = SnapshotStore(settings.state_dir)
         saved = store.load_backup(backup_id) if backup_id is not None else store.load(name or 'default')
         def explain_plan(plan):
+            if plan.accepted and no_minimize:
+                click.echo('Windows saved as minimized will stay untouched.')
             if plan.name_fallback:
                 click.echo('Saved session is stale; using partial name fallback. '
                            'Single-window apps may match regardless of title. '
@@ -139,7 +142,7 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
         coordinator = RestoreCoordinator(desktop(settings), store, timeout=settings.timeout,
                                          on_backup=(lambda path: click.echo(f'Pre-restore backup: {path}')) if verbose else None,
                                          on_plan=explain_plan if verbose else None)
-        report = coordinator.restore(saved, preserve=preserve, fallback=not no_fallback)
+        report = coordinator.restore(saved, preserve=preserve, fallback=not no_fallback, minimize=not no_minimize)
         emit_report(ctx, report, name=backup_id or name or 'default', verbose=verbose)
 
 

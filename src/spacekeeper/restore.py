@@ -176,8 +176,10 @@ class RestoreCoordinator:
             self.sleep(min(self.interval, max(0, deadline - self.clock())))
         raise YabaiError(YabaiFailure.TIMEOUT, "Focus/visibility restoration was not confirmed.")
 
-    def restore(self, saved: Snapshot, *, preserve: tuple[WindowRule, ...] = (), fallback: bool = True) -> RestoreReport:
-        return self._restore(saved, lambda before: plan_restore(saved, before, preserve=preserve, fallback=fallback))
+    def restore(self, saved: Snapshot, *, preserve: tuple[WindowRule, ...] = (), fallback: bool = True,
+                minimize: bool = True) -> RestoreReport:
+        return self._restore(saved, lambda before: plan_restore(saved, before, preserve=preserve,
+                                                               fallback=fallback, minimize=minimize))
 
     def apply_preset(self, preset: 'Preset') -> RestoreReport:
         return self._restore(None, preset.plan)
@@ -294,8 +296,10 @@ class RestoreCoordinator:
                 elif ((window.display_uuid, window.fullscreen) != (target.display_uuid, target.fullscreen) or
                       (target.minimized is not None and window.minimized != target.minimized)):
                     issues.append(RestoreIssue("verification", "window_target_mismatch", decision.window_id))
+            elif decision.reason == Reason.MINIMIZE_DISABLED and decision.window_id not in original:
+                continue  # An ignored saved window was already absent before restore.
             elif decision.reason in (Reason.EXTRA_ORDINARY, Reason.PRESERVED, Reason.PRESET_UNMATCHED,
-                                     Reason.FALLBACK_UNMATCHED):
+                                     Reason.FALLBACK_UNMATCHED, Reason.MINIMIZE_DISABLED):
                 previous = original[decision.window_id]
                 if window is None or window.identity != previous.identity or any(
                     getattr(window, key) != getattr(previous, key)
@@ -303,7 +307,8 @@ class RestoreCoordinator:
                 ):
                     reason = {Reason.EXTRA_ORDINARY: 'extra_ordinary_changed', Reason.PRESERVED: 'preserved_window_changed',
                               Reason.PRESET_UNMATCHED: 'unmatched_window_changed',
-                              Reason.FALLBACK_UNMATCHED: 'fallback_unmatched_changed'}[decision.reason]
+                              Reason.FALLBACK_UNMATCHED: 'fallback_unmatched_changed',
+                              Reason.MINIMIZE_DISABLED: 'minimize_disabled_changed'}[decision.reason]
                     issues.append(RestoreIssue("verification", reason, decision.window_id))
         for target in plan.visible:
             window = current.get(target.identity.window_id)

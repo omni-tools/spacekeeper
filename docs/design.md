@@ -24,6 +24,8 @@ For windows represented by the snapshot, restore native fullscreen on/off, minim
 
 Snapshot targets explicitly include minimized state, in both original-session and name-fallback restores. Restore a minimized window from the Dock before any monitor or fullscreen changes, then minimize last when the saved state requires it. An already-matching minimized window stays in the Dock without focus operations. Final verification includes minimized state, and unmatched windows retain their Dock state. Hidden apps and protected windows remain unsupported. Presets do not manage minimized state and continue to reject minimized matches.
 
+`restore --no-minimize` skips windows saved as minimized, leaving their current state untouched and excluding those intentional skips from missed counts. It applies to named/default and backup restores, in both original-session and name-fallback modes. Other saved windows restore normally, including deminimization. Ignore saved visibility/focus for skipped windows; verify surviving skipped windows remain unchanged. Keep skipped sources in name-uniqueness counts so the option cannot authorize an ambiguous rebind. Preset behavior is unchanged.
+
 **In same-session restore, extra windows absent from the snapshot exit fullscreen by default.** They stay open. Extra ordinary windows remain unchanged. Do not treat sticky/system/overlay windows as restore targets. Optional preserve filters exclude matching extra fullscreen windows from this policy. In stale-session name fallback, unmatched current windows remain untouched without needing preserve filters. Matched saved windows follow their snapshot targets.
 
 Use the verified monitor-first sequence for a fullscreen window on the wrong monitor:

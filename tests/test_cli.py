@@ -16,6 +16,21 @@ from tests.support import A, B, SESSION, observe, window
 
 
 class CliTests(unittest.TestCase):
+    def test_no_minimize_ignores_dock_targets_for_named_and_backup_restores(self):
+        store = SnapshotStore(self.state)
+        saved = observe(window(minimized=True))
+        store.save(saved, 'alpha')
+        backup = store.backup(saved)
+        original = self.device.windows[1]
+        for args in (('restore', 'alpha', '--no-minimize'),
+                     ('restore', '--backup', backup.stem, '--no-minimize')):
+            with self.subTest(args=args):
+                result = self.invoke(*args)
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertIn('was restored (0 missed)', result.output)
+                self.assertEqual(self.device.windows[1], original)
+                self.assertEqual(self.device.commands, [])
+
     def test_restore_defaults_to_one_completion_line_and_persists_details(self):
         SnapshotStore(self.state).save(observe(window(focused=True)), 'alpha')
         result = self.invoke('restore', 'alpha')

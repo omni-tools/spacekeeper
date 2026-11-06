@@ -95,6 +95,15 @@ windows saved outside it. Monitor and fullscreen changes happen before final
 minimization; a minimized target is never focused for final visibility. Hidden
 apps and protected/system windows remain unsupported.
 
+Use `--no-minimize` to skip windows saved as minimized. They stay untouched,
+including their monitor/fullscreen state and any existing Dock state, and do not
+count as missed. Other snapshot windows still restore normally, including
+restoring them from the Dock when needed. The option also works with `--backup`.
+
+```sh
+spacekeeper restore alpha --no-minimize
+```
+
 Snapshot names are 1–64 ASCII letters, digits, dots, underscores, or hyphens,
 starting with a letter or digit. The default state directory is
 `~/.local/state/spacekeeper`, with `snapshots/`, `backups/`, and `reports/`.
