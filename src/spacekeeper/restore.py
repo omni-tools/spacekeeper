@@ -89,13 +89,35 @@ class RestoreReport:
     issues: tuple[RestoreIssue, ...]
     name_fallback: bool = False
 
+    @property
+    def missed(self) -> int:
+        """Count distinct unsuccessful windows across source and live references."""
+        bindings = {w.window_id: w.source_window_id for w in self.windows if w.source_window_id is not None}
+        bindings.update({i.window_id: i.source_window_id for i in self.issues
+                         if i.window_id is not None and i.source_window_id is not None})
+        def key(window_id, source_window_id=None):
+            source = source_window_id if source_window_id is not None else bindings.get(window_id)
+            return ('source', source) if source is not None else ('live', window_id)
+        missed = {key(w.window_id, w.source_window_id) for w in self.windows
+                  if w.status not in ('restored', 'unchanged', 'excluded')}
+        missed.update(key(i.window_id, i.source_window_id) for i in self.issues
+                      if i.window_id is not None or i.source_window_id is not None)
+        return len(missed)
+
+    @property
+    def hard_failure(self) -> bool:
+        """Distinguish partial planning misses from operations/verification failure."""
+        return (any(w.status == 'failed' for w in self.windows) or
+                any(i.scope != 'planning' or (i.window_id is None and i.source_window_id is None)
+                    for i in self.issues) or (not self.complete and self.missed == 0))
+
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 class RestoreCoordinator:
     def __init__(self, desktop: Desktop, store: SnapshotStore, *, lock_path: Path | None = None,
-                 timeout: float = 12, poll_interval: float = 0.2,
+                 timeout: float = 30, poll_interval: float = 0.2,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
                  on_backup: Callable[[Path], None] | None = None,
                  on_plan: Callable[[RestorePlan], None] | None = None):

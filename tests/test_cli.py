@@ -16,17 +16,69 @@ from tests.support import A, B, SESSION, observe, window
 
 
 class CliTests(unittest.TestCase):
+    def test_restore_defaults_to_one_completion_line_and_persists_details(self):
+        SnapshotStore(self.state).save(observe(window(focused=True)), 'alpha')
+        result = self.invoke('restore', 'alpha')
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(result.output, 'Workspace snapshot alpha was restored (0 missed)\n')
+        self.assertEqual(len(list((self.state/'backups').glob('*.json'))), 1)
+        self.assertEqual(len(list((self.state/'reports').glob('*.json'))), 1)
+
+    def test_restore_completion_styles_name_and_missed_count(self):
+        import click
+        SnapshotStore(self.state).save(observe(window(focused=True)), 'alpha')
+        result = self.invoke('restore', 'alpha', color=True)
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn(click.style('alpha', fg='blue', bold=True), result.output)
+        self.assertIn(click.style('(0 missed)', dim=True), result.output)
+
+    def test_verbose_can_precede_or_follow_restore_and_keeps_the_completion_last(self):
+        SnapshotStore(self.state).save(observe(window(focused=True)), 'alpha')
+        for args in (('--verbose', 'restore', 'alpha'), ('restore', 'alpha', '--verbose')):
+            with self.subTest(args=args):
+                result = self.invoke(*args)
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertIn('Pre-restore backup:', result.output)
+                self.assertIn('Report:', result.output)
+                self.assertTrue(result.output.endswith('Workspace snapshot alpha was restored (0 missed)\n'))
+
+    def test_default_timeout_allows_thirty_seconds_without_a_special_flag(self):
+        from spacekeeper.config import Settings
+        self.assertEqual(Settings.load(config_dir=self.config).timeout, 30)
+
     def test_query_timeout_names_the_read_stage_and_prevents_backup_or_commands(self):
         SnapshotStore(self.state).save(observe(window()))
         def timeout(domain, count):
             raise YabaiError(YabaiFailure.TIMEOUT, 'Command execution failed: timeout.')
         self.device.on_query = timeout
-        result = self.invoke('restore')
+        result = self.invoke('restore', '--verbose')
         self.assertEqual(result.exit_code, 1, result.output)
         self.assertIn('Desktop observation timed out', result.output)
         self.assertIn('yabai displays query timed out', result.output)
         self.assertIn('increase --timeout', result.output)
         self.assertNotIn('Pre-restore backup:', result.output)
+        self.assertEqual(self.device.commands, [])
+
+    def test_query_timeout_is_a_short_error_without_verbose(self):
+        SnapshotStore(self.state).save(observe(window()))
+        def timeout(domain, count):
+            raise YabaiError(YabaiFailure.TIMEOUT, 'Details')
+        self.device.on_query = timeout
+        result = self.invoke('restore')
+        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.output, 'Error: Timed out waiting for the desktop to settle.\n')
+        self.assertEqual(self.device.commands, [])
+
+    def test_global_final_verification_timeout_cannot_print_zero_missed_success(self):
+        SnapshotStore(self.state).save(observe(window(focused=True)))
+        def timeout(domain, count):
+            if domain == 'displays' and count > 2:
+                raise YabaiError(YabaiFailure.TIMEOUT, 'Details')
+        self.device.on_query = timeout
+        result = self.invoke('restore')
+        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.output, 'Error: Desktop verification timed out.\n')
+        self.assertNotIn('was restored', result.output)
         self.assertEqual(self.device.commands, [])
 
     def test_preset_capture_preview_apply_and_overwrite(self):
@@ -105,12 +157,13 @@ class CliTests(unittest.TestCase):
         self.device.windows[2] = window(2, fullscreen=True)
         restored = self.invoke('restore', 'desk')
         self.assertEqual(restored.exit_code, 0, restored.output)
-        self.assertIn('Restore complete', restored.output)
+        self.assertEqual(restored.output, 'Workspace snapshot desk was restored (0 missed)\n')
         self.assertEqual((self.device.windows[1].display_uuid, self.device.windows[1].fullscreen), (A, False))
         self.assertFalse(self.device.windows[2].fullscreen)
         backup = next((self.state / 'backups').glob('*.json'))
         recovered = self.invoke('restore', '--backup', backup.stem)
         self.assertEqual(recovered.exit_code, 0, recovered.output)
+        self.assertEqual(recovered.output, f'Workspace snapshot {backup.stem} was restored (0 missed)\n')
         self.assertEqual((self.device.windows[1].display_uuid, self.device.windows[1].fullscreen), (B, True))
         self.assertTrue(self.device.windows[2].fullscreen)
 
@@ -141,10 +194,11 @@ class CliTests(unittest.TestCase):
     def test_incomplete_restore_exits_one_with_backup_and_report(self):
         SnapshotStore(self.state).save(observe(window(fullscreen=True)))
         self.device.effects['toggle'] = False
-        result = self.invoke('restore')
+        result = self.invoke('restore', '--verbose')
         self.assertEqual(result.exit_code, 1, result.output)
         self.assertIn('Pre-restore backup:', result.output)
         self.assertIn('Restore incomplete', result.output)
+        self.assertNotIn('was restored', result.output)
         self.assertEqual(len(list((self.state / 'backups').glob('*.json'))), 1)
         self.assertEqual(len(list((self.state / 'reports').glob('*.json'))), 1)
 
@@ -152,7 +206,7 @@ class CliTests(unittest.TestCase):
         SnapshotStore(self.state).save(observe(window(), session=replace(SESSION, login_session_id=101)))
         result = self.invoke('restore', '--no-fallback')
         self.assertEqual(result.exit_code, 1)
-        self.assertIn('session_mismatch', result.output)
+        self.assertEqual(result.output, 'Error: Snapshot belongs to a different boot/login session.\n')
         self.assertEqual(self.device.commands, [])
 
     def test_old_session_uses_default_name_fallback_with_current_window_ids(self):
@@ -161,7 +215,7 @@ class CliTests(unittest.TestCase):
         SnapshotStore(self.state).save(saved)
         extra = window(1, app='Other', fullscreen=True)
         self.device.windows = {1: extra, 9: window(9, focused=True)}
-        result = self.invoke('restore')
+        result = self.invoke('restore', '--verbose')
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn('using partial name fallback', result.output)
         self.assertIn('Window 9: matched snapshot window 1', result.output)
@@ -178,13 +232,16 @@ class CliTests(unittest.TestCase):
         self.device.windows[2] = window(2, title='Another window')
         result = self.invoke('restore')
         self.assertEqual(result.exit_code, 1, result.output)
-        self.assertIn('name_no_match (snapshot window 1)', result.output)
+        self.assertEqual(result.output, 'Workspace snapshot default was restored (1 missed)\n')
         self.assertEqual(self.device.commands, [])
+        detailed = self.invoke('restore', '--verbose')
+        self.assertIn('name_no_match (snapshot window 1)', detailed.output)
+        self.assertTrue(detailed.output.endswith('Workspace snapshot default was restored (1 missed)\n'))
 
     def test_single_window_app_fallback_is_explicit_in_stdout_and_report(self):
         SnapshotStore(self.state).save(observe(window(title='Old title', minimized=True),
                                               session=replace(SESSION, login_session_id=101)))
-        result = self.invoke('restore')
+        result = self.invoke('restore', '--verbose')
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn('by single-window app fallback.', result.output)
         self.assertTrue(self.device.windows[1].minimized)

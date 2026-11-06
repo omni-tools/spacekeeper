@@ -37,7 +37,22 @@ uv run spacekeeper capture             # Replace the default snapshot.
 uv run spacekeeper capture work        # Existing named snapshots require --force.
 uv run spacekeeper list
 uv run spacekeeper restore work        # Changes the desktop.
+uv run spacekeeper restore work --verbose  # Include backup, matches, issues, and report paths.
 ```
+
+Restore normally prints one completion line:
+
+```text
+Workspace snapshot work was restored (0 missed)
+```
+
+The snapshot name is bold blue and the missed count is dim in a color-capable
+terminal; redirected output is plain text. Missing, ambiguous, unsupported, or
+failed windows count once each, even when they produce several issues. Healthy
+helper/preserve exclusions and untouched unrelated windows do not count.
+`--verbose` (or `-v`) can also precede `restore`. Backups and full JSON reports
+are always saved. Hard failures show a short error instead of a restored message;
+partial restores retain exit code 1.
 
 **Same-session restore exits fullscreen for extra windows absent from the snapshot.**
 Extra ordinary windows stay open and unchanged. Capture and list do not change
@@ -94,7 +109,7 @@ uv run spacekeeper --state-dir /path/to/state capture work
 
 Global options precede the command. `--config-dir` selects the optional
 `config.json` directory (default `~/.config/spacekeeper`). Its accepted fields
-are `state_dir`, `yabai` (executable path), `timeout` (seconds, default 12), and
+are `state_dir`, `yabai` (executable path), `timeout` (seconds, default 30), and
 `preserve` (app/title rules).
 Relative paths in this file resolve against its directory. Neither listing nor
 configuration loading creates missing directories.
@@ -129,12 +144,13 @@ configuration is reported with an error. A per-user lock under
 from running together.
 
 After wake or a display change, yabai can temporarily stop answering queries.
-Restore retries read-only desktop observations within the configured timeout,
-without retrying window-edit commands. The initial observation must succeed
-before a backup or any window edits. To allow more time for a settling desktop:
+Restore automatically retries read-only desktop observations for up to 30 seconds
+by default, without retrying window-edit commands. No special flag is needed.
+Explicit CLI/environment/config timeout overrides still apply. The initial
+observation must succeed before a backup or any window edits:
 
 ```sh
-spacekeeper --timeout 30 restore alpha
+spacekeeper restore alpha
 ```
 
 Exit codes: **0** for success, **1** for operational errors or incomplete

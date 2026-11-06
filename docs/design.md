@@ -54,6 +54,10 @@ Both roots must be overridable. Respect the chosen state/config root consistentl
 
 Use shell-free subprocess argument arrays, bounded timeouts and output, clear errors, and one restore at a time. Changes are opt-in through an explicit restore invocation; capture/list are read-only. A CLI boundary lets VS Code and other languages integrate later without sharing Python implementation code. The earlier JSON-output proposal was not explicitly settled: design a machine-readable result model now and confirm the external JSON option when integration is implemented.
 
+The default observation/transition budget is 30 seconds. Read-only observations retry transient timeouts and topology changes inside that budget, so ordinary restore after wake/display changes needs no special flag. Explicit timeout overrides are honored. Window-edit commands are not blindly retried.
+
+Snapshot restore prints only `Workspace snapshot NAME was restored (N missed)` by default. Style NAME bold blue and the parenthesized count dim when terminal color is enabled; redirected output remains plain. `--verbose`/`-v`, before or after `restore`, exposes the backup path, policy explanation, outcome/issue diagnostics, and report path before the completion line. Always retain full private backups/reports. Count distinct unsuccessful windows across source/live references, deduplicating outcomes and issues; ignore healthy exclusions and monitor fallback. Hard failures (rejected sessions, failed operations, visibility/focus errors, or failed final verification) show a short error without a restored message. Preserve exit codes 0 for complete, 1 for partial/error, and 2 for usage errors.
+
 ### Suggested implementation boundaries
 
 - **App matching:** `app_matching.py` exposes `restore_name_key(window)` and a registry of pure app title rules. Add rules there without changing restore planning; uniqueness and owner checks remain the planner/executor's responsibility. See [adding app matching rules](app-matching.md).

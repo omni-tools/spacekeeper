@@ -11,7 +11,7 @@ from spacekeeper.identity import IdentityUnavailable
 from spacekeeper.matching import WindowRule
 from spacekeeper.restore import RestoreCoordinator, RestoreError
 from spacekeeper.storage import SnapshotStore, StorageError, validate_name
-from spacekeeper.yabai import Yabai, YabaiError
+from spacekeeper.yabai import Yabai, YabaiError, YabaiFailure
 
 
 class SnapshotName(click.ParamType):
@@ -29,10 +29,12 @@ DIRECTORY = click.Path(file_okay=False, path_type=Path)
 
 
 @contextmanager
-def operational_errors():
+def operational_errors(*, verbose=True):
     try:
         yield
     except (StorageError, YabaiError, IdentityUnavailable, RestoreError, ConfigError) as error:
+        if not verbose and isinstance(error, YabaiError) and error.reason == YabaiFailure.TIMEOUT:
+            raise click.ClickException('Timed out waiting for the desktop to settle.') from error
         raise click.ClickException(str(error)) from error
 
 
@@ -50,12 +52,14 @@ def desktop(settings: Settings) -> Yabai:
 @click.option('--yabai', type=click.Path(dir_okay=False, path_type=Path), envvar='SPACEKEEPER_YABAI',
               help='Path to yabai; otherwise discover it automatically.')
 @click.option('--timeout', type=click.FloatRange(min=0.1, max=300), envvar='SPACEKEEPER_TIMEOUT',
-              help='Per-transition/observation timeout in seconds (default: 12).')
+              help='Per-transition/observation timeout in seconds (default: 30).')
+@click.option('-v', '--verbose', 'global_verbose', is_flag=True, help='Show detailed restore diagnostics.')
 @click.pass_context
-def main(ctx: click.Context, state_dir, config_dir, yabai, timeout) -> None:
+def main(ctx: click.Context, state_dir, config_dir, yabai, timeout, global_verbose) -> None:
     """Capture and restore macOS fullscreen arrangements in the current session."""
     with operational_errors():
         ctx.obj = Settings.load(state_dir=state_dir, config_dir=config_dir, yabai=yabai, timeout=timeout)
+        ctx.meta['verbose'] = global_verbose
 
 
 @main.command()
@@ -97,9 +101,10 @@ def list_snapshots(ctx: click.Context) -> None:
 @click.option('--no-preserve', is_flag=True, help='Ignore configured preserve rules for this restore.')
 @click.option('--no-fallback', is_flag=True,
               help='Reject stale boot/login snapshots instead of partially matching app and window names.')
+@click.option('-v', '--verbose', is_flag=True, help='Show backup, matching, verification, and report details.')
 @click.pass_context
 def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserve_rules, no_preserve: bool,
-            no_fallback: bool) -> None:
+            no_fallback: bool, verbose: bool) -> None:
     """Restore NAME (default: default), with name fallback for stale sessions.
 
     Same-session restores exit fullscreen for extra windows. After a reboot or
@@ -109,6 +114,7 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
     backup is saved before mutations.
     Missing/ambiguous windows make the result incomplete (exit 1).
     """
+    verbose = verbose or ctx.meta.get('verbose', False)
     if backup_id is not None and name is not None:
         raise click.UsageError('Choose a snapshot name or --backup, not both.')
     if no_preserve and preserve_rules:
@@ -118,7 +124,7 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
     except ValueError as error:
         raise click.BadParameter(str(error), param_hint='--preserve') from error
     settings = ctx.obj
-    with operational_errors():
+    with operational_errors(verbose=verbose):
         store = SnapshotStore(settings.state_dir)
         saved = store.load_backup(backup_id) if backup_id is not None else store.load(name or 'default')
         def explain_plan(plan):
@@ -131,13 +137,31 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
                 if preserve:
                     click.echo(f'Preserve filters: {len(preserve)} rule(s).')
         coordinator = RestoreCoordinator(desktop(settings), store, timeout=settings.timeout,
-                                         on_backup=lambda path: click.echo(f'Pre-restore backup: {path}'),
-                                         on_plan=explain_plan)
+                                         on_backup=(lambda path: click.echo(f'Pre-restore backup: {path}')) if verbose else None,
+                                         on_plan=explain_plan if verbose else None)
         report = coordinator.restore(saved, preserve=preserve, fallback=not no_fallback)
-        emit_report(ctx, report)
+        emit_report(ctx, report, name=backup_id or name or 'default', verbose=verbose)
 
 
-def emit_report(ctx, report):
+def emit_report(ctx, report, *, name=None, verbose=True):
+    if verbose:
+        emit_details(report)
+    if name is not None:
+        if report.hard_failure:
+            if any(i.reason == 'session_mismatch' for i in report.issues):
+                message = 'Snapshot belongs to a different boot/login session.'
+            elif any(i.scope == 'verification' and i.reason == 'timeout' for i in report.issues):
+                message = 'Desktop verification timed out.'
+            else:
+                message = 'Restore could not be verified.'
+            raise click.ClickException(message)
+        click.echo('Workspace snapshot ' + click.style(name, fg='blue', bold=True) + ' was restored ' +
+                   click.style(f'({report.missed} missed)', dim=True))
+    if not report.complete:
+        ctx.exit(1)
+
+
+def emit_details(report):
     counts = Counter(window.status for window in report.windows)
     summary = ', '.join(f'{count} {status}' for status, count in sorted(counts.items())) or 'no windows'
     click.echo(('Restore complete: ' if report.complete else 'Restore incomplete: ') + summary)
@@ -157,8 +181,6 @@ def emit_report(ctx, report):
             locations.append(f'window {issue.window_id}')
         click.echo(f'{issue.scope}: {issue.reason}' + (' (' + ', '.join(locations) + ')' if locations else ''))
     click.echo(f'Report: {report.report_path}')
-    if not report.complete:
-        ctx.exit(1)
 
 
 @main.group('preset')

@@ -57,7 +57,7 @@ class Settings:
             configured_path('state_dir') if 'state_dir' in data else Path.home() / '.local/state/spacekeeper')
         binary = yabai.expanduser().resolve() if yabai is not None else (
             configured_path('yabai') if 'yabai' in data else None)
-        seconds = timeout if timeout is not None else data.get('timeout', 12)
+        seconds = timeout if timeout is not None else data.get('timeout', 30)
         if type(seconds) not in (int, float) or not 0.1 <= seconds <= 300 or not math.isfinite(seconds):
             raise ConfigError('Timeout must be a finite number between 0.1 and 300 seconds.')
         return cls(state, directory, binary, float(seconds), preserve)
