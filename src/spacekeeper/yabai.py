@@ -157,6 +157,10 @@ class Yabai:
             if type(data) is not list or not all(type(item) is dict for item in data):
                 raise ValueError
             return data
+        except YabaiError as error:
+            if error.reason == YabaiFailure.TIMEOUT:
+                raise YabaiError(YabaiFailure.TIMEOUT, f"yabai {domain} query timed out.") from error
+            raise
         except (ValueError, UnicodeDecodeError, RecursionError) as error:
             raise YabaiError(YabaiFailure.INVALID_RESPONSE, f"Invalid yabai {domain} response.") from error
 

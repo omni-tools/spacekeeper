@@ -143,6 +143,8 @@ class AdapterTests(unittest.TestCase):
             with self.subTest(reason=reason), self.assertRaises(YabaiError) as caught:
                 adapter.query("spaces")
             self.assertEqual(caught.exception.reason, expected)
+            if reason == ProcessFailure.TIMEOUT:
+                self.assertIn('yabai spaces query timed out', str(caught.exception))
 
     def test_capability_permission_and_service_errors_do_not_expose_raw_output(self):
         for diagnostic, expected in (("cannot connect socket", Failure.SERVICE_UNAVAILABLE),

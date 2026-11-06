@@ -128,6 +128,15 @@ configuration is reported with an error. A per-user lock under
 `/private/tmp/spacekeeper-UID/` prevents restores across different state roots
 from running together.
 
+After wake or a display change, yabai can temporarily stop answering queries.
+Restore retries read-only desktop observations within the configured timeout,
+without retrying window-edit commands. The initial observation must succeed
+before a backup or any window edits. To allow more time for a settling desktop:
+
+```sh
+spacekeeper --timeout 30 restore alpha
+```
+
 Exit codes: **0** for success, **1** for operational errors or incomplete
 restores, **2** for usage errors. A complete restore confirms supported targets,
 visible windows, and focus. Expected system-window exclusions are listed

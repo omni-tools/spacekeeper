@@ -10,12 +10,25 @@ from click.testing import CliRunner
 from spacekeeper.cli import main
 from spacekeeper.restore import RestoreCoordinator, restore_lock
 from spacekeeper.storage import SnapshotStore
-from spacekeeper.yabai import Yabai
+from spacekeeper.yabai import Yabai, YabaiError, YabaiFailure
 from tests.fake_yabai import Clock, FakeYabai
 from tests.support import A, B, SESSION, observe, window
 
 
 class CliTests(unittest.TestCase):
+    def test_query_timeout_names_the_read_stage_and_prevents_backup_or_commands(self):
+        SnapshotStore(self.state).save(observe(window()))
+        def timeout(domain, count):
+            raise YabaiError(YabaiFailure.TIMEOUT, 'Command execution failed: timeout.')
+        self.device.on_query = timeout
+        result = self.invoke('restore')
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn('Desktop observation timed out', result.output)
+        self.assertIn('yabai displays query timed out', result.output)
+        self.assertIn('increase --timeout', result.output)
+        self.assertNotIn('Pre-restore backup:', result.output)
+        self.assertEqual(self.device.commands, [])
+
     def test_preset_capture_preview_apply_and_overwrite(self):
         captured = self.invoke('preset', 'capture', 'work')
         self.assertEqual(captured.exit_code, 0, captured.output)

@@ -82,6 +82,56 @@ class RestoreTests(unittest.TestCase):
         with restore_lock(self.lock):
             pass
 
+    def test_initial_query_timeout_can_recover_before_the_observation_deadline(self):
+        desktop = FakeYabai(window(focused=True))
+        coordinator = self.coordinator(desktop)
+        read = coordinator.desktop.observe
+        calls = []
+        def transient_timeout(**options):
+            calls.append(options['deadline'])
+            if len(calls) == 1:
+                coordinator.sleep(0.4)
+                self.assertFalse((self.store.root / 'backups').exists())
+                self.assertEqual(desktop.commands, [])
+                raise YabaiError(YabaiFailure.TIMEOUT, 'Command execution failed: timeout.')
+            return read(**options)
+        coordinator.desktop.observe = transient_timeout
+        report = coordinator.restore(observe(window(focused=True)))
+        self.assertTrue(report.complete, report)
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertEqual(calls[:2], [1, 1])
+        self.assertEqual(desktop.commands, [])
+
+    def test_repeated_query_timeouts_remain_bounded_and_cannot_create_a_backup(self):
+        desktop = FakeYabai(window())
+        coordinator = self.coordinator(desktop)
+        calls = []
+        def timeout(**options):
+            calls.append(options['deadline'])
+            coordinator.sleep(min(0.4, options['deadline'] - coordinator.clock()))
+            raise YabaiError(YabaiFailure.TIMEOUT, 'Command execution failed: timeout.')
+        coordinator.desktop.observe = timeout
+        with self.assertRaises(YabaiError) as caught:
+            coordinator.restore(observe(window()))
+        self.assertEqual(caught.exception.reason, YabaiFailure.TIMEOUT)
+        self.assertIn('Desktop observation timed out', str(caught.exception))
+        self.assertIn('--timeout', str(caught.exception))
+        self.assertEqual(calls, [1, 1])
+        self.assertEqual(coordinator.clock(), 1)
+        self.assertFalse((self.store.root / 'backups').exists())
+        self.assertEqual(desktop.commands, [])
+
+    def test_observation_permission_failure_is_not_retried(self):
+        desktop = FakeYabai(window())
+        coordinator = self.coordinator(desktop)
+        with patch.object(coordinator.desktop, 'observe', side_effect=YabaiError(YabaiFailure.ACCESS_DENIED, 'Denied')) as read:
+            with self.assertRaises(YabaiError) as caught:
+                coordinator.restore(observe(window()))
+        self.assertEqual(caught.exception.reason, YabaiFailure.ACCESS_DENIED)
+        self.assertEqual(read.call_count, 1)
+        self.assertFalse((self.store.root / 'backups').exists())
+        self.assertEqual(desktop.commands, [])
+
     def test_rejected_session_still_has_backup_and_report_but_no_mutations(self):
         desktop = FakeYabai(window())
         saved = observe(window(fullscreen=True), session=replace(SESSION, login_session_id=101))

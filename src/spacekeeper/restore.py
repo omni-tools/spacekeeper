@@ -107,14 +107,22 @@ class RestoreCoordinator:
                                              clock=clock, sleep=sleep)
 
     def _observe(self, deadline: float) -> Snapshot:
+        last_error = None
         while self.clock() < deadline:
             try:
                 return self.desktop.observe(deadline=deadline)
             except YabaiError as error:
-                if error.reason != YabaiFailure.DESKTOP_CHANGED:
+                if error.reason not in (YabaiFailure.DESKTOP_CHANGED, YabaiFailure.TIMEOUT):
                     raise
+                # A client query may time out while yabai is handling display
+                # changes. Retry reads within the original observation budget;
+                # this never retries a focus, fullscreen, move, or Dock command.
+                last_error = error
                 self.sleep(min(self.interval, max(0, deadline - self.clock())))
-        raise YabaiError(YabaiFailure.TIMEOUT, "Desktop observation did not settle.")
+        detail = f" Last query error: {last_error}" if last_error is not None else ''
+        raise YabaiError(YabaiFailure.TIMEOUT,
+                         "Desktop observation timed out while waiting for yabai." + detail + " "
+                         "Retry after the desktop settles, or increase --timeout.") from last_error
 
     @staticmethod
     def _focus_matches(snapshot: Snapshot, identity: WindowIdentity, display_uuid: str | None) -> bool:
