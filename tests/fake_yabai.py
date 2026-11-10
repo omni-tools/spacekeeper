@@ -32,7 +32,8 @@ class FakeYabai:
         self.query_counts = {domain: 0 for domain in ("displays", "spaces", "windows")}
         self.queries = []
         self.space_indexes = {}
-        self.effects = {"focus": True, "toggle": True, "move": True, "minimize": True, "deminimize": True}
+        self.effects = {"focus": True, "toggle": True, "move": True, "minimize": True, "deminimize": True,
+                        "space_order": True}
         self.failures = {}
         self.on_query = lambda domain, count: None
         self.after_command = lambda operation: None
@@ -94,6 +95,18 @@ class FakeYabai:
                     data = [project(item) for item in data] if isinstance(data, list) else project(data)
                 return ProcessResult(0, json.dumps(data).encode(), b"")
             self.commands.append(args)
+            if args[1] == 'space':
+                if 'space_order' in self.failures:
+                    return ProcessResult(1, b'', self.failures['space_order'].encode())
+                if self.effects['space_order']:
+                    spaces = sorted(self.raw()['spaces'], key=lambda s: s['index'])
+                    moving = next(s for s in spaces if s['index'] == int(args[2]))
+                    anchor = next(s for s in spaces if s['index'] == int(args[4]))
+                    spaces.remove(moving)
+                    spaces.insert(spaces.index(anchor) + 1, moving)
+                    self.space_indexes = {s['id']: i for i, s in enumerate(spaces, start=1)}
+                self.after_command('space_order')
+                return ProcessResult(0, b'', b'')
             if args[1:3] == ("window", "--focus"):
                 operation, id = "focus", int(args[3])
             elif args[2] in ('--minimize', '--deminimize'):

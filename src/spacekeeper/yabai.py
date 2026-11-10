@@ -16,6 +16,7 @@ from spacekeeper.process import CommandRunner, ProcessError, ProcessFailure, Sub
 from spacekeeper.snapshot import (
     Display, Frame, ProcessIdentity, SessionIdentity, Snapshot, SnapshotError, Space, Window, WindowIdentity,
 )
+from spacekeeper.space_order import FullscreenOrder, SpaceOrderError, resolve_order
 
 
 # Placement is joined from Space membership. Asking yabai to resolve space/display
@@ -354,6 +355,27 @@ class Yabai:
         if window.fullscreen:
             raise YabaiError(YabaiFailure.WINDOW_STATE_CHANGED, "Window entered fullscreen before its move.")
         self._command("-m", "window", str(identity.window_id), "--space", str(destination.index), deadline=deadline)
+
+    def move_fullscreen_space_after(self, members: tuple[WindowIdentity, ...],
+                                    predecessor: tuple[WindowIdentity, ...], session: SessionIdentity,
+                                    display_uuid: str, *, deadline: float | None = None) -> None:
+        # A global observation binds both owners and current Space indexes in
+        # one stable topology. Never command a saved Space index or window ID.
+        observed = self.observe(deadline=deadline)
+        if observed.session != session:
+            raise YabaiError(YabaiFailure.SESSION_CHANGED, 'The graphical session has changed.')
+        try:
+            anchor, moving = resolve_order(FullscreenOrder(display_uuid, (predecessor, members)), observed)
+        except SpaceOrderError as error:
+            raise YabaiError(YabaiFailure.WINDOW_STATE_CHANGED, str(error)) from error
+        if moving.index > anchor.index:
+            return
+        if set(moving.window_ids) != {i.window_id for i in members}:
+            raise YabaiError(YabaiFailure.UNSUPPORTED_WINDOW,
+                             'Cannot reorder a fullscreen Space containing unrelated windows.')
+        # Moving an earlier Space to a later Space inserts it after that Space.
+        # This operation requires yabai's scripting addition; failure is reported.
+        self._command('-m', 'space', str(moving.index), '--move', str(anchor.index), deadline=deadline)
 
 
 def _focus_ready(observed: Snapshot | WindowObservation, window: Window) -> bool:

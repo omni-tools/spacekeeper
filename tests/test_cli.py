@@ -16,6 +16,20 @@ from tests.support import A, B, SESSION, observe, window
 
 
 class CliTests(unittest.TestCase):
+    def test_ignore_position_works_for_snapshot_and_backup(self):
+        saved = observe(window(fullscreen=True, focused=True), window(2, fullscreen=True))
+        store = SnapshotStore(self.state)
+        store.save(saved, 'alpha')
+        backup = store.backup(saved)
+        self.device.windows = {w.id: w for w in saved.windows}
+        self.device.space_indexes = {1001: 4, 1002: 3}
+        for args in (('restore', 'alpha', '--ignore-position'),
+                     ('restore', '--backup', backup.stem, '--ignore-position')):
+            with self.subTest(args=args):
+                result = self.invoke(*args)
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertEqual(self.device.commands, [])
+
     def test_no_minimize_ignores_dock_targets_for_named_and_backup_restores(self):
         store = SnapshotStore(self.state)
         saved = observe(window(minimized=True))

@@ -4,13 +4,14 @@ An executor must re-observe ownership, monitor UUIDs, and normal destination
 Spaces before each mutation. An accepted plan is not evidence of restoration.
 """
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from collections import Counter, defaultdict
 from enum import StrEnum
 
 from spacekeeper.app_matching import restore_name_key
 from spacekeeper.matching import WindowRule
 from spacekeeper.snapshot import Snapshot, Window, WindowIdentity
+from spacekeeper.space_order import FullscreenOrder
 
 
 class DecisionStatus(StrEnum):
@@ -88,6 +89,7 @@ class RestorePlan:
     focus: WindowIdentity | None = None
     issues: tuple[PlanIssue, ...] = ()
     name_fallback: bool = False
+    fullscreen_order: tuple[FullscreenOrder, ...] = ()
 
     def to_dict(self) -> dict:
         """A machine-readable result; status values describe planning only."""
@@ -163,7 +165,7 @@ def _views(saved: Snapshot, targets: dict[int, WindowTarget | None], connected: 
 
 
 def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRule, ...] = (),
-                 fallback: bool = True, minimize: bool = True) -> RestorePlan:
+                 fallback: bool = True, minimize: bool = True, ignore_position: bool = False) -> RestorePlan:
     """Return deterministic per-window targets and final visibility/focus intent.
 
     Same-session IDs require the original owner. Stale boot/login sessions can
@@ -174,7 +176,7 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
     """
     if saved.session != current.session:
         if fallback and saved.session.uid == current.session.uid:
-            return _name_restore(saved, current, minimize=minimize)
+            return _with_order(saved, _name_restore(saved, current, minimize=minimize), ignore_position)
         return RestorePlan(False, issues=(PlanIssue(Reason.SESSION_MISMATCH),))
 
     live_windows = {w.id: w for w in current.windows}
@@ -224,7 +226,30 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
     targets = {d.window_id: d.target for d in decisions if d.target is not None}
     issues = []
     visible, focus = _views(saved, targets, connected, issues, minimize=minimize)
-    return RestorePlan(True, tuple(decisions), visible, focus, tuple(issues))
+    return _with_order(saved, RestorePlan(True, tuple(decisions), visible, focus, tuple(issues)), ignore_position)
+
+
+def _with_order(saved: Snapshot, plan: RestorePlan, ignore_position: bool) -> RestorePlan:
+    if ignore_position:
+        return plan
+    targets = {(d.source_window_id if d.source_window_id is not None else d.window_id): d.target
+               for d in plan.windows if d.target is not None and d.target.fullscreen}
+    groups = defaultdict(list)
+    for space in sorted(saved.spaces, key=lambda s: s.index):
+        if not space.fullscreen:
+            continue
+        destinations = defaultdict(list)
+        for window in saved.windows:
+            target = targets.get(window.id)
+            if window.space_id == space.id and window.fullscreen and target is not None:
+                destinations[target.display_uuid].append(target.identity)
+        for destination, members in destinations.items():
+            # A disconnected monitor can collapse onto another. Preserve each
+            # source monitor's subsequence without inventing a combined order.
+            groups[space.display_uuid, destination].append(tuple(sorted(members, key=lambda i: i.window_id)))
+    order = tuple(FullscreenOrder(destination, tuple(windows))
+                  for (_, destination), windows in sorted(groups.items()) if len(windows) > 1)
+    return replace(plan, fullscreen_order=order)
 
 
 def _name_restore(saved: Snapshot, current: Snapshot, *, minimize: bool = True) -> RestorePlan:

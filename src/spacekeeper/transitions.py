@@ -29,6 +29,9 @@ class Desktop(Protocol):
                  *, deadline: float | None = None) -> None: ...
     def move_to_display(self, identity: WindowIdentity, session: SessionIdentity, display_uuid: str,
                         *, deadline: float | None = None) -> None: ...
+    def move_fullscreen_space_after(self, members: tuple[WindowIdentity, ...],
+                                    predecessor: tuple[WindowIdentity, ...], session: SessionIdentity,
+                                    display_uuid: str, *, deadline: float | None = None) -> None: ...
 
 
 class TransitionStatus(StrEnum):

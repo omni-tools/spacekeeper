@@ -88,12 +88,24 @@ spacekeeper restore alpha --no-fallback  # Require the original boot/login sessi
 ```
 
 Same-session closed/replaced owners remain skipped; name fallback is for stale
-boot/login sessions. Restore does not reopen apps/windows or restore Space
-ordering or ordinary window frames. `--no-fallback` also applies with `--backup`.
+boot/login sessions. Restore does not reopen apps/windows or restore ordinary
+window frames. `--no-fallback` also applies with `--backup`.
 Snapshot restore minimizes matched windows saved in the Dock and restores matched
 windows saved outside it. Monitor and fullscreen changes happen before final
 minimization; a minimized target is never focused for final visibility. Hidden
 apps and protected/system windows remain unsupported.
+
+Restore also puts matched fullscreen Spaces in their saved relative order within
+each display, after restoring displays and states. Ordinary desktops keep their
+relative order; absolute Space slots are not restored. Reordering requires
+yabai's scripting addition. If a needed move is unavailable, restore reports an
+incomplete result; it does not change macOS security settings. Already-correct
+order needs no Space moves. Use `--ignore-position` to skip ordering while still
+restoring displays, fullscreen/Dock states, visibility, and focus:
+
+```sh
+spacekeeper restore alpha --ignore-position
+```
 
 Use `--no-minimize` to skip windows saved as minimized. They stay untouched,
 including their monitor/fullscreen state and any existing Dock state, and do not

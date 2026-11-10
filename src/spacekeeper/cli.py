@@ -102,10 +102,12 @@ def list_snapshots(ctx: click.Context) -> None:
 @click.option('--no-fallback', is_flag=True,
               help='Reject stale boot/login snapshots instead of partially matching app and window names.')
 @click.option('--no-minimize', is_flag=True, help='Leave windows saved as minimized untouched.')
+@click.option('--ignore-position', is_flag=True,
+              help='Skip relative fullscreen-Space ordering; still restore displays and window states.')
 @click.option('-v', '--verbose', is_flag=True, help='Show backup, matching, verification, and report details.')
 @click.pass_context
 def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserve_rules, no_preserve: bool,
-            no_fallback: bool, no_minimize: bool, verbose: bool) -> None:
+            no_fallback: bool, no_minimize: bool, ignore_position: bool, verbose: bool) -> None:
     """Restore NAME (default: default), with name fallback for stale sessions.
 
     Same-session restores exit fullscreen for extra windows. After a reboot or
@@ -142,7 +144,8 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
         coordinator = RestoreCoordinator(desktop(settings), store, timeout=settings.timeout,
                                          on_backup=(lambda path: click.echo(f'Pre-restore backup: {path}')) if verbose else None,
                                          on_plan=explain_plan if verbose else None)
-        report = coordinator.restore(saved, preserve=preserve, fallback=not no_fallback, minimize=not no_minimize)
+        report = coordinator.restore(saved, preserve=preserve, fallback=not no_fallback, minimize=not no_minimize,
+                                     ignore_position=ignore_position)
         emit_report(ctx, report, name=backup_id or name or 'default', verbose=verbose)
 
 

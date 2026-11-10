@@ -13,6 +13,7 @@ from spacekeeper.identity import IdentityUnavailable
 from spacekeeper.matching import WindowRule
 from spacekeeper.planner import DecisionStatus, Reason, RestorePlan, WindowTarget, plan_restore
 from spacekeeper.snapshot import Snapshot, WindowIdentity
+from spacekeeper.space_order import SpaceOrderError, resolve_order
 from spacekeeper.storage import SnapshotStore
 from spacekeeper.transitions import Desktop, TransitionStatus, WindowTransitions
 from spacekeeper.yabai import YabaiError, YabaiFailure
@@ -177,9 +178,52 @@ class RestoreCoordinator:
         raise YabaiError(YabaiFailure.TIMEOUT, "Focus/visibility restoration was not confirmed.")
 
     def restore(self, saved: Snapshot, *, preserve: tuple[WindowRule, ...] = (), fallback: bool = True,
-                minimize: bool = True) -> RestoreReport:
+                minimize: bool = True, ignore_position: bool = False) -> RestoreReport:
         return self._restore(saved, lambda before: plan_restore(saved, before, preserve=preserve,
-                                                               fallback=fallback, minimize=minimize))
+                                                               fallback=fallback, minimize=minimize,
+                                                               ignore_position=ignore_position))
+
+    def _restore_order(self, plan: RestorePlan, session, outcomes: list[WindowOutcome]) -> list[RestoreIssue]:
+        issues = []
+        for order in plan.fullscreen_order:
+            window_id = order.windows[0][0].window_id
+            try:
+                deadline = self.clock() + self.timeout
+                observed = self._observe(deadline)
+                if observed.session != session:
+                    raise YabaiError(YabaiFailure.SESSION_CHANGED, 'The graphical session has changed.')
+                spaces = resolve_order(order, observed)
+                for index in range(1, len(spaces)):
+                    window_id = order.windows[index][0].window_id
+                    if spaces[index].index > spaces[index - 1].index:
+                        continue
+                    moving, predecessor = order.windows[index], order.windows[index - 1]
+                    moved_ids = {identity.window_id for identity in moving}
+                    outcomes[:] = [replace(o, attempted_operations=o.attempted_operations + ('space_order',))
+                                   if o.window_id in moved_ids else o for o in outcomes]
+                    self.desktop.move_fullscreen_space_after(moving, predecessor, session, order.display_uuid,
+                                                             deadline=deadline)
+                    stable = 0
+                    while self.clock() < deadline:
+                        observed = self._observe(deadline)
+                        if observed.session != session:
+                            raise YabaiError(YabaiFailure.SESSION_CHANGED, 'The graphical session has changed.')
+                        spaces = resolve_order(order, observed)
+                        matches = spaces[index].index > spaces[index - 1].index
+                        stable = stable + 1 if matches else 0
+                        if stable == 2:
+                            break
+                        self.sleep(min(self.interval, max(0, deadline - self.clock())))
+                    else:
+                        raise YabaiError(YabaiFailure.TIMEOUT, 'Fullscreen Space ordering was not confirmed.')
+            except (YabaiError, IdentityUnavailable, SpaceOrderError) as error:
+                issues.append(RestoreIssue('ordering', _reason(error),
+                                           error.window_id if isinstance(error, SpaceOrderError) else window_id,
+                                           order.display_uuid))
+                if isinstance(error, YabaiError) and error.reason in (
+                        YabaiFailure.CAPABILITY_UNAVAILABLE, YabaiFailure.SESSION_CHANGED):
+                    break
+        return issues
 
     def apply_preset(self, preset: 'Preset') -> RestoreReport:
         return self._restore(None, preset.plan)
@@ -222,6 +266,10 @@ class RestoreCoordinator:
                                                       decision.monitor_fallback, source_window_id=decision.source_window_id,
                                                       match_method=decision.match_method))
 
+                if not session_changed and plan.fullscreen_order:
+                    order_issues = self._restore_order(plan, before.session, outcomes)
+                    issues.extend(order_issues)
+                    session_changed = any(i.reason == YabaiFailure.SESSION_CHANGED for i in order_issues)
                 eligible = {outcome.window_id for outcome in outcomes if outcome.status in ("restored", "unchanged")}
                 already_matches = (not any(d.status == DecisionStatus.PLANNED for d in plan.windows) and
                                    not self._verify(plan, before, before))
@@ -321,6 +369,15 @@ class RestoreCoordinator:
         if plan.focus is not None and not RestoreCoordinator._focus_matches(final, plan.focus, None):
             issues.append(RestoreIssue("verification", "focused_window_mismatch", plan.focus.window_id))
         known_ids = {decision.window_id for decision in plan.windows}
+        for order in plan.fullscreen_order:
+            try:
+                spaces = resolve_order(order, final)
+                for index in range(1, len(spaces)):
+                    if spaces[index].index < spaces[index - 1].index:
+                        issues.append(RestoreIssue('verification', 'fullscreen_order_mismatch',
+                                                   order.windows[index][0].window_id, order.display_uuid))
+            except SpaceOrderError as error:
+                issues.append(RestoreIssue('verification', error.reason, error.window_id, order.display_uuid))
         for window in final.windows:
             if (window.id not in known_ids and window.fullscreen and not window.sticky and window.root_window and
                     (window.role, window.subrole) == ("AXWindow", "AXStandardWindow")):
@@ -329,6 +386,8 @@ class RestoreCoordinator:
 
 
 def _reason(error: Exception) -> str:
+    if isinstance(error, SpaceOrderError):
+        return error.reason
     if isinstance(error, YabaiError):
         return error.reason.value
     return YabaiFailure.IDENTITY_UNAVAILABLE.value
