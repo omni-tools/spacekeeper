@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Callable
 
 from spacekeeper.identity import IdentityUnavailable
 from spacekeeper.matching import WindowRule
-from spacekeeper.planner import DecisionStatus, Reason, RestorePlan, WindowTarget, plan_restore
+from spacekeeper.planner import DecisionStatus, Reason, RestorePlan, RestoreSelection, WindowTarget, plan_restore
 from spacekeeper.snapshot import Snapshot, WindowIdentity
 from spacekeeper.space_order import SpaceOrderError, resolve_order
 from spacekeeper.storage import SnapshotStore
@@ -178,10 +178,14 @@ class RestoreCoordinator:
         raise YabaiError(YabaiFailure.TIMEOUT, "Focus/visibility restoration was not confirmed.")
 
     def restore(self, saved: Snapshot, *, preserve: tuple[WindowRule, ...] = (), fallback: bool = True,
-                minimize: bool = True, ignore_position: bool = False) -> RestoreReport:
+                minimize: bool = True, ignore_position: bool = False, fullscreen: bool = True,
+                only_fullscreen: bool = False, only_minimize: bool = False) -> RestoreReport:
+        RestoreSelection(only_fullscreen, only_minimize, fullscreen, minimize)  # Validate before desktop/backup IO.
         return self._restore(saved, lambda before: plan_restore(saved, before, preserve=preserve,
                                                                fallback=fallback, minimize=minimize,
-                                                               ignore_position=ignore_position))
+                                                               ignore_position=ignore_position, fullscreen=fullscreen,
+                                                               only_fullscreen=only_fullscreen,
+                                                               only_minimize=only_minimize))
 
     def _restore_order(self, plan: RestorePlan, session, outcomes: list[WindowOutcome]) -> list[RestoreIssue]:
         issues = []
@@ -344,10 +348,11 @@ class RestoreCoordinator:
                 elif ((window.display_uuid, window.fullscreen) != (target.display_uuid, target.fullscreen) or
                       (target.minimized is not None and window.minimized != target.minimized)):
                     issues.append(RestoreIssue("verification", "window_target_mismatch", decision.window_id))
-            elif decision.reason == Reason.MINIMIZE_DISABLED and decision.window_id not in original:
+            elif decision.reason in (Reason.MINIMIZE_DISABLED, Reason.STATE_FILTERED) and decision.window_id not in original:
                 continue  # An ignored saved window was already absent before restore.
             elif decision.reason in (Reason.EXTRA_ORDINARY, Reason.PRESERVED, Reason.PRESET_UNMATCHED,
-                                     Reason.FALLBACK_UNMATCHED, Reason.MINIMIZE_DISABLED):
+                                     Reason.FALLBACK_UNMATCHED, Reason.MINIMIZE_DISABLED,
+                                     Reason.STATE_FILTERED, Reason.FILTER_UNMATCHED):
                 previous = original[decision.window_id]
                 if window is None or window.identity != previous.identity or any(
                     getattr(window, key) != getattr(previous, key)
@@ -356,7 +361,9 @@ class RestoreCoordinator:
                     reason = {Reason.EXTRA_ORDINARY: 'extra_ordinary_changed', Reason.PRESERVED: 'preserved_window_changed',
                               Reason.PRESET_UNMATCHED: 'unmatched_window_changed',
                               Reason.FALLBACK_UNMATCHED: 'fallback_unmatched_changed',
-                              Reason.MINIMIZE_DISABLED: 'minimize_disabled_changed'}[decision.reason]
+                              Reason.MINIMIZE_DISABLED: 'minimize_disabled_changed',
+                              Reason.STATE_FILTERED: 'state_filtered_changed',
+                              Reason.FILTER_UNMATCHED: 'filter_unmatched_changed'}[decision.reason]
                     issues.append(RestoreIssue("verification", reason, decision.window_id))
         for target in plan.visible:
             window = current.get(target.identity.window_id)
@@ -379,7 +386,8 @@ class RestoreCoordinator:
             except SpaceOrderError as error:
                 issues.append(RestoreIssue('verification', error.reason, error.window_id, order.display_uuid))
         for window in final.windows:
-            if (window.id not in known_ids and window.fullscreen and not window.sticky and window.root_window and
+            if (not plan.preserve_extras and window.id not in known_ids and window.fullscreen and
+                    not window.sticky and window.root_window and
                     (window.role, window.subrole) == ("AXWindow", "AXStandardWindow")):
                 issues.append(RestoreIssue("verification", "new_fullscreen_window", window.id))
         return issues

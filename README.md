@@ -116,6 +116,31 @@ restoring them from the Dock when needed. The option also works with `--backup`.
 spacekeeper restore alpha --no-minimize
 ```
 
+Saved-state filters select whole windows, including their saved display and
+fullscreen/Dock states. They do not filter individual operations:
+
+| Option | Windows restored |
+| --- | --- |
+| `--only-fullscreen` | Saved fullscreen |
+| `--only-minimize` | Saved minimized |
+| `--no-fullscreen` | Saved outside fullscreen |
+| `--no-minimize` | Saved outside the Dock |
+
+The two `--only-*` flags cannot be combined, nor can a flag be combined with its
+opposite. `--no-fullscreen --no-minimize` selects saved ordinary windows. Skipped
+windows do not count as missed and are excluded from final focus/visibility.
+Matching still considers all saved windows to avoid ambiguous matches.
+`--only-fullscreen`, `--only-minimize`, and `--no-fullscreen` leave unrelated
+current windows untouched. Default restore and `--no-minimize` alone retain
+same-session cleanup of extra fullscreen windows. All filters work with `--backup`
+and can be combined with `--ignore-position`.
+
+```sh
+spacekeeper restore alpha --only-fullscreen --ignore-position
+spacekeeper restore alpha --only-minimize
+spacekeeper restore alpha --no-fullscreen --no-minimize
+```
+
 Snapshot names are 1–64 ASCII letters, digits, dots, underscores, or hyphens,
 starting with a letter or digit. The default state directory is
 `~/.local/state/spacekeeper`, with `snapshots/`, `backups/`, and `reports/`.

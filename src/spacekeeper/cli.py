@@ -9,6 +9,7 @@ import click
 from spacekeeper.config import ConfigError, Settings
 from spacekeeper.identity import IdentityUnavailable
 from spacekeeper.matching import WindowRule
+from spacekeeper.planner import RestoreSelection
 from spacekeeper.restore import RestoreCoordinator, RestoreError
 from spacekeeper.storage import SnapshotStore, StorageError, validate_name
 from spacekeeper.yabai import Yabai, YabaiError, YabaiFailure
@@ -102,16 +103,21 @@ def list_snapshots(ctx: click.Context) -> None:
 @click.option('--no-fallback', is_flag=True,
               help='Reject stale boot/login snapshots instead of partially matching app and window names.')
 @click.option('--no-minimize', is_flag=True, help='Leave windows saved as minimized untouched.')
+@click.option('--no-fullscreen', is_flag=True, help='Leave windows saved as fullscreen untouched.')
+@click.option('--only-fullscreen', is_flag=True, help='Restore only windows saved as fullscreen.')
+@click.option('--only-minimize', is_flag=True, help='Restore only windows saved as minimized.')
 @click.option('--ignore-position', is_flag=True,
               help='Skip relative fullscreen-Space ordering; still restore displays and window states.')
 @click.option('-v', '--verbose', is_flag=True, help='Show backup, matching, verification, and report details.')
 @click.pass_context
 def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserve_rules, no_preserve: bool,
-            no_fallback: bool, no_minimize: bool, ignore_position: bool, verbose: bool) -> None:
+            no_fallback: bool, no_minimize: bool, no_fullscreen: bool, only_fullscreen: bool,
+            only_minimize: bool, ignore_position: bool, verbose: bool) -> None:
     """Restore NAME (default: default), with name fallback for stale sessions.
 
-    Same-session restores exit fullscreen for extra windows. After a reboot or
-    login change, unique app/title pairs are preferred. Code titles match by their
+    Same-session restores exit fullscreen for extra windows. With --only-fullscreen,
+    --only-minimize or --no-fullscreen, extra windows stay untouched. After a reboot
+    or login change, unique app/title pairs are preferred. Code titles match by their
     trailing workspace name. Apps with one saved and one current main window can match
     regardless of title. Unmatched current windows stay untouched. A verified
     backup is saved before mutations.
@@ -122,6 +128,10 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
         raise click.UsageError('Choose a snapshot name or --backup, not both.')
     if no_preserve and preserve_rules:
         raise click.UsageError('Choose --preserve or --no-preserve, not both.')
+    try:
+        selection = RestoreSelection(only_fullscreen, only_minimize, not no_fullscreen, not no_minimize)
+    except ValueError as error:
+        raise click.UsageError(str(error)) from error
     try:
         preserve = () if no_preserve else ctx.obj.preserve + tuple(WindowRule(*rule) for rule in preserve_rules)
     except ValueError as error:
@@ -137,15 +147,18 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
                 click.echo('Saved session is stale; using partial name fallback. '
                            'Single-window apps may match regardless of title. '
                            'Unmatched current windows will stay untouched.')
-            elif plan.accepted:
+            elif plan.accepted and not selection.preserve_extras:
                 click.echo('Unmatched extra fullscreen windows absent from this snapshot will exit fullscreen.')
                 if preserve:
                     click.echo(f'Preserve filters: {len(preserve)} rule(s).')
+            if plan.accepted and selection.preserve_extras:
+                click.echo('Saved-state filters select windows; other current windows will stay untouched.')
         coordinator = RestoreCoordinator(desktop(settings), store, timeout=settings.timeout,
                                          on_backup=(lambda path: click.echo(f'Pre-restore backup: {path}')) if verbose else None,
                                          on_plan=explain_plan if verbose else None)
         report = coordinator.restore(saved, preserve=preserve, fallback=not no_fallback, minimize=not no_minimize,
-                                     ignore_position=ignore_position)
+                                     ignore_position=ignore_position, fullscreen=not no_fullscreen,
+                                     only_fullscreen=only_fullscreen, only_minimize=only_minimize)
         emit_report(ctx, report, name=backup_id or name or 'default', verbose=verbose)
 
 

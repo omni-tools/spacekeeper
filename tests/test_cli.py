@@ -16,6 +16,43 @@ from tests.support import A, B, SESSION, observe, window
 
 
 class CliTests(unittest.TestCase):
+    def test_state_filters_restore_named_and_backup_snapshots(self):
+        saved = observe(window(fullscreen=True), window(2, minimized=True))
+        store = SnapshotStore(self.state)
+        store.save(saved, 'alpha')
+        backup = store.backup(saved)
+        for option, selected in (('--only-fullscreen', {1}), ('--only-minimize', {2}),
+                                 ('--no-fullscreen', {2})):
+            for source in (('alpha',), ('--backup', backup.stem)):
+                with self.subTest(option=option, source=source):
+                    self.device.windows = {1: window(), 2: window(2), 3: window(3, fullscreen=True, display=B)}
+                    self.device.commands.clear()
+                    result = self.invoke('restore', *source, option)
+                    self.assertEqual(result.exit_code, 0, result.output)
+                    self.assertEqual(self.device.windows[1].fullscreen, 1 in selected)
+                    self.assertEqual(self.device.windows[2].minimized, 2 in selected)
+                    self.assertTrue(self.device.windows[3].fullscreen)
+
+    def test_conflicting_state_filters_fail_before_loading_snapshot_or_desktop(self):
+        for flags in (('--only-fullscreen', '--only-minimize'),
+                      ('--only-fullscreen', '--no-fullscreen'),
+                      ('--only-minimize', '--no-minimize')):
+            with self.subTest(flags=flags), patch('spacekeeper.cli.desktop') as device, \
+                    patch.object(SnapshotStore, 'load') as load:
+                result = self.invoke('restore', 'alpha', *flags)
+                self.assertEqual(result.exit_code, 2, result.output)
+                self.assertIn('not both', result.output)
+                device.assert_not_called()
+                load.assert_not_called()
+                self.assertFalse(self.state.exists())
+
+    def test_verbose_state_filter_explanation_does_not_claim_extra_cleanup(self):
+        SnapshotStore(self.state).save(observe(window()), 'alpha')
+        result = self.invoke('restore', 'alpha', '--only-fullscreen', '--verbose')
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn('other current windows will stay untouched', result.output)
+        self.assertNotIn('will exit fullscreen', result.output)
+
     def test_ignore_position_works_for_snapshot_and_backup(self):
         saved = observe(window(fullscreen=True, focused=True), window(2, fullscreen=True))
         store = SnapshotStore(self.state)

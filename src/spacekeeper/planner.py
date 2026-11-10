@@ -38,6 +38,8 @@ class Reason(StrEnum):
     EXTRA_ORDINARY = "extra_ordinary"
     PRESERVED = "preserved_extra"
     MINIMIZE_DISABLED = "minimize_disabled"
+    STATE_FILTERED = "state_filtered"
+    FILTER_UNMATCHED = "filter_unmatched"
     PRESET_UNMATCHED = "preset_unmatched"
     FALLBACK_UNMATCHED = "fallback_unmatched"
     NAME_NO_MATCH = "name_no_match"
@@ -54,6 +56,36 @@ class WindowTarget:
     fullscreen: bool
     # None leaves Dock state outside this target's scope (presets and extras).
     minimized: bool | None = None
+
+
+@dataclass(frozen=True)
+class RestoreSelection:
+    only_fullscreen: bool = False
+    only_minimize: bool = False
+    fullscreen: bool = True
+    minimize: bool = True
+
+    def __post_init__(self) -> None:
+        if self.only_fullscreen and self.only_minimize:
+            raise ValueError('Choose --only-fullscreen or --only-minimize, not both.')
+        if self.only_fullscreen and not self.fullscreen:
+            raise ValueError('Choose --only-fullscreen or --no-fullscreen, not both.')
+        if self.only_minimize and not self.minimize:
+            raise ValueError('Choose --only-minimize or --no-minimize, not both.')
+
+    @property
+    def preserve_extras(self) -> bool:
+        # --no-minimize alone retains the original extra-fullscreen cleanup.
+        return self.only_fullscreen or self.only_minimize or not self.fullscreen
+
+    def exclusion(self, window: Window) -> Reason | None:
+        if window.minimized and not self.minimize:
+            return Reason.MINIMIZE_DISABLED
+        if ((self.only_fullscreen and not window.fullscreen) or
+                (self.only_minimize and not window.minimized) or
+                (not self.fullscreen and window.fullscreen)):
+            return Reason.STATE_FILTERED
+        return None
 
 
 @dataclass(frozen=True)
@@ -90,6 +122,7 @@ class RestorePlan:
     issues: tuple[PlanIssue, ...] = ()
     name_fallback: bool = False
     fullscreen_order: tuple[FullscreenOrder, ...] = ()
+    preserve_extras: bool = False
 
     def to_dict(self) -> dict:
         """A machine-readable result; status values describe planning only."""
@@ -129,9 +162,8 @@ def _window_target(wanted: Window, actual: Window, connected: set[str], normal_d
 
 
 def _views(saved: Snapshot, targets: dict[int, WindowTarget | None], connected: set[str],
-           issues: list[PlanIssue], *, name_fallback: bool = False, minimize: bool = True):
+           issues: list[PlanIssue], *, name_fallback: bool = False, ignored: frozenset[int] = frozenset()):
     visible = []
-    ignored = {w.id for w in saved.windows if w.minimized and not minimize}
     def unavailable(reason, window_id, display_uuid=None):
         if name_fallback:
             if not any(i.source_window_id == window_id for i in issues):
@@ -165,7 +197,8 @@ def _views(saved: Snapshot, targets: dict[int, WindowTarget | None], connected: 
 
 
 def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRule, ...] = (),
-                 fallback: bool = True, minimize: bool = True, ignore_position: bool = False) -> RestorePlan:
+                 fallback: bool = True, minimize: bool = True, ignore_position: bool = False,
+                 fullscreen: bool = True, only_fullscreen: bool = False, only_minimize: bool = False) -> RestorePlan:
     """Return deterministic per-window targets and final visibility/focus intent.
 
     Same-session IDs require the original owner. Stale boot/login sessions can
@@ -174,9 +207,11 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
     other windows stay untouched. Different users and opt-out callers retain
     strict rejection.
     """
+    selection = RestoreSelection(only_fullscreen, only_minimize, fullscreen, minimize)
+    ignored = frozenset(w.id for w in saved.windows if selection.exclusion(w) is not None)
     if saved.session != current.session:
         if fallback and saved.session.uid == current.session.uid:
-            return _with_order(saved, _name_restore(saved, current, minimize=minimize), ignore_position)
+            return _with_order(saved, _name_restore(saved, current, selection=selection, ignored=ignored), ignore_position)
         return RestorePlan(False, issues=(PlanIssue(Reason.SESSION_MISMATCH),))
 
     live_windows = {w.id: w for w in current.windows}
@@ -189,8 +224,9 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
         if unsupported_reason(wanted) == Reason.PROTECTED_WINDOW:
             decisions.append(WindowDecision(wanted.id, DecisionStatus.UNSUPPORTED, Reason.PROTECTED_WINDOW))
             continue
-        if wanted.minimized and not minimize:
-            decisions.append(WindowDecision(wanted.id, DecisionStatus.EXCLUDED, Reason.MINIMIZE_DISABLED))
+        exclusion = selection.exclusion(wanted)
+        if exclusion is not None:
+            decisions.append(WindowDecision(wanted.id, DecisionStatus.EXCLUDED, exclusion))
             continue
         actual = live_windows.get(wanted.id)
         if actual is None:
@@ -211,6 +247,9 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
         decisions.append(_window_target(wanted, actual, connected, normal_displays))
 
     for extra in sorted((w for w in current.windows if w.id not in saved_ids), key=lambda w: w.id):
+        if selection.preserve_extras:
+            decisions.append(WindowDecision(extra.id, DecisionStatus.EXCLUDED, Reason.FILTER_UNMATCHED))
+            continue
         unsupported = unsupported_reason(extra)
         if unsupported is not None:
             decisions.append(WindowDecision(extra.id, DecisionStatus.UNSUPPORTED, unsupported))
@@ -225,8 +264,9 @@ def plan_restore(saved: Snapshot, current: Snapshot, *, preserve: tuple[WindowRu
 
     targets = {d.window_id: d.target for d in decisions if d.target is not None}
     issues = []
-    visible, focus = _views(saved, targets, connected, issues, minimize=minimize)
-    return _with_order(saved, RestorePlan(True, tuple(decisions), visible, focus, tuple(issues)), ignore_position)
+    visible, focus = _views(saved, targets, connected, issues, ignored=ignored)
+    return _with_order(saved, RestorePlan(True, tuple(decisions), visible, focus, tuple(issues),
+                                         preserve_extras=selection.preserve_extras), ignore_position)
 
 
 def _with_order(saved: Snapshot, plan: RestorePlan, ignore_position: bool) -> RestorePlan:
@@ -252,7 +292,8 @@ def _with_order(saved: Snapshot, plan: RestorePlan, ignore_position: bool) -> Re
     return replace(plan, fullscreen_order=order)
 
 
-def _name_restore(saved: Snapshot, current: Snapshot, *, minimize: bool = True) -> RestorePlan:
+def _name_restore(saved: Snapshot, current: Snapshot, *, selection: RestoreSelection,
+                  ignored: frozenset[int]) -> RestorePlan:
     """A partial name restore never treats old window IDs as live references."""
     wanted_windows = [w for w in saved.windows if unsupported_reason(w) != Reason.PROTECTED_WINDOW]
     sources, live, live_apps = defaultdict(list), defaultdict(list), defaultdict(list)
@@ -269,7 +310,7 @@ def _name_restore(saved: Snapshot, current: Snapshot, *, minimize: bool = True) 
     normal_displays = {s.display_uuid for s in current.spaces if not s.fullscreen}
     decisions, targets, issues = {}, {}, []
     for wanted in sorted(wanted_windows, key=lambda w: w.id):
-        if wanted.minimized and not minimize:
+        if wanted.id in ignored:
             continue
         unsupported = unsupported_reason(wanted, allow_minimized=True)
         if unsupported is not None:
@@ -298,5 +339,6 @@ def _name_restore(saved: Snapshot, current: Snapshot, *, minimize: bool = True) 
     for window in current.windows:
         if window.id not in decisions:
             decisions[window.id] = WindowDecision(window.id, DecisionStatus.EXCLUDED, Reason.FALLBACK_UNMATCHED)
-    visible, focus = _views(saved, targets, connected, issues, name_fallback=True, minimize=minimize)
-    return RestorePlan(True, tuple(decisions[id] for id in sorted(decisions)), visible, focus, tuple(issues), True)
+    visible, focus = _views(saved, targets, connected, issues, name_fallback=True, ignored=ignored)
+    return RestorePlan(True, tuple(decisions[id] for id in sorted(decisions)), visible, focus, tuple(issues), True,
+                       preserve_extras=selection.preserve_extras)
