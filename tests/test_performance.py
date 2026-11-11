@@ -30,7 +30,7 @@ class QueryBudgetTests(unittest.TestCase):
         subprocess.run([sys.executable, '-c', code], check=True, capture_output=True)
 
     def adapter(self, fake, clock):
-        return Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+        return Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
 
     def full_window_queries(self, fake):
         return [args for args in fake.queries if args[2] == '--windows' and '--window' not in args]

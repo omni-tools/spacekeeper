@@ -12,6 +12,7 @@ import time
 from typing import Callable
 
 from spacekeeper.identity import IdentityReader, IdentityUnavailable
+from spacekeeper.accessibility import AccessibilityError, FullscreenSetter
 from spacekeeper.process import CommandRunner, ProcessError, ProcessFailure, SubprocessRunner
 from spacekeeper.snapshot import (
     Display, Frame, ProcessIdentity, SessionIdentity, Snapshot, SnapshotError, Space, Window, WindowIdentity,
@@ -89,7 +90,7 @@ class Yabai:
     def __init__(self, *, executable: str | None = None, runner: CommandRunner | None = None,
                  identities: IdentityReader | None = None, command_timeout: float = 10,
                  output_limit: int = 4 * 1024 * 1024, capture_attempts: int = 3,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic, fullscreen_setter=None):
         if not math.isfinite(command_timeout) or command_timeout <= 0:
             raise ValueError("command_timeout must be positive and finite.")
         if type(output_limit) is not int or output_limit < 1:
@@ -103,6 +104,7 @@ class Yabai:
         self.output_limit = output_limit
         self.capture_attempts = capture_attempts
         self.clock = clock
+        self.fullscreen_setter = fullscreen_setter
 
     def _command(self, *args: str, deadline: float | None = None) -> bytes:
         timeout = self.command_timeout if deadline is None else min(self.command_timeout, deadline - self.clock())
@@ -298,6 +300,100 @@ class Yabai:
         if observed.window.minimized and not allow_minimized:
             raise YabaiError(YabaiFailure.UNSUPPORTED_WINDOW, "Restore a minimized window before focus or placement changes.")
         return observed, observed.window
+
+    def check_owner(self, identity: WindowIdentity, session: SessionIdentity) -> None:
+        if self.identities.session() != session:
+            raise YabaiError(YabaiFailure.SESSION_CHANGED, 'The graphical session has changed.')
+        if self.identities.process(identity.owner.pid) != identity.owner:
+            raise YabaiError(YabaiFailure.OWNER_CHANGED, 'The window process has changed.')
+
+    def _request_guard(self, identity: WindowIdentity, session: SessionIdentity,
+                       deadline: float | None, *, allow_minimized: bool = False,
+                       no_op_dock_state: bool | None = None) -> dict:
+        """One targeted read, plus fresh cheap ownership checks around it.
+
+        Requests do not promise postconditions. The coordinator must verify all
+        results globally; callers must refresh topology at dependent moves.
+        """
+        self.check_owner(identity, session)
+        raw = self.query('windows', window_id=identity.window_id, deadline=deadline,
+                         properties='id,pid,role,subrole,root-window,is-hidden,is-sticky,is-minimized,has-focus')[0]
+        self.check_owner(identity, session)
+        try:
+            if raw['pid'] != identity.owner.pid:
+                raise YabaiError(YabaiFailure.OWNER_CHANGED, 'The window has a different process owner.')
+            flags = ('root-window', 'is-hidden', 'is-sticky', 'is-minimized', 'has-focus')
+            if any(type(raw[key]) is not bool for key in flags):
+                raise ValueError
+            if no_op_dock_state is not None and raw['is-minimized'] == no_op_dock_state:
+                # No edit is authorized or needed. A changed AX role after a
+                # completed minimize must not turn a verified no-op into failure.
+                return raw
+            if (raw['is-hidden'] or raw['is-sticky'] or not raw['root-window'] or
+                    (raw['role'], raw['subrole']) != ('AXWindow', 'AXStandardWindow')):
+                raise YabaiError(YabaiFailure.UNSUPPORTED_WINDOW, 'The window is not a supported restore target.')
+            if raw['is-minimized'] and not allow_minimized:
+                raise YabaiError(YabaiFailure.WINDOW_STATE_CHANGED, 'The window is still minimized.')
+        except (KeyError, TypeError, ValueError) as error:
+            raise YabaiError(YabaiFailure.INVALID_RESPONSE, 'Invalid window request guard.') from error
+        return raw
+
+    def request_focus(self, identity: WindowIdentity, session: SessionIdentity,
+                      *, deadline: float | None = None, force: bool = False) -> None:
+        raw = self._request_guard(identity, session, deadline)
+        if force or not raw['has-focus']:
+            self._command('-m', 'window', '--focus', str(identity.window_id), deadline=deadline)
+
+    def request_minimize(self, identity: WindowIdentity, session: SessionIdentity, desired: bool,
+                         *, deadline: float | None = None) -> None:
+        if type(desired) is not bool:
+            raise ValueError('desired must be a boolean.')
+        raw = self._request_guard(identity, session, deadline, allow_minimized=True, no_op_dock_state=desired)
+        if raw['is-minimized'] == desired:
+            return
+        try:
+            self._command('-m', 'window', '--minimize' if desired else '--deminimize',
+                          str(identity.window_id), deadline=deadline)
+        except YabaiError as error:
+            if error.reason != YabaiFailure.COMMAND_FAILED:
+                raise
+            # yabai rejects an already-minimized/deminimized window. An
+            # asynchronous request can finish between the guard and command.
+            # Re-read that identity instead of retrying or claiming failure.
+            actual = self._request_guard(identity, session, deadline, allow_minimized=True, no_op_dock_state=desired)
+            if actual['is-minimized'] != desired:
+                raise error
+
+    def request_fullscreen(self, identity: WindowIdentity, session: SessionIdentity, desired: bool,
+                           *, deadline: float | None = None) -> None:
+        if type(desired) is not bool:
+            raise ValueError('desired must be a boolean.')
+        self._request_guard(identity, session, deadline)
+        timeout = self.command_timeout if deadline is None else min(self.command_timeout, deadline - self.clock())
+        if timeout <= 0:
+            raise YabaiError(YabaiFailure.TIMEOUT, 'The fullscreen request deadline expired.')
+        try:
+            if self.fullscreen_setter is None:
+                self.fullscreen_setter = FullscreenSetter(clock=self.clock)
+            self.fullscreen_setter.set_fullscreen(identity, desired, timeout=timeout,
+                                                 guard=lambda: self.check_owner(identity, session))
+        except AccessibilityError as error:
+            raise YabaiError(YabaiFailure(error.reason), str(error)) from error
+
+    def request_move_to_display(self, identity: WindowIdentity, session: SessionIdentity, display_uuid: str,
+                                observed: WindowObservation, *, deadline: float | None = None) -> None:
+        if observed.session != session or observed.window.identity != identity:
+            raise YabaiError(YabaiFailure.OWNER_CHANGED, 'The move observation has changed identity.')
+        if observed.window.fullscreen or observed.window.minimized:
+            raise YabaiError(YabaiFailure.WINDOW_STATE_CHANGED, 'The window is not ready to move.')
+        if display_uuid not in {d.uuid for d in observed.displays}:
+            raise YabaiError(YabaiFailure.DISPLAY_MISSING, 'The destination monitor disconnected.')
+        candidates = sorted((s for s in observed.spaces if s.display_uuid == display_uuid and not s.fullscreen),
+                            key=lambda s: s.index)
+        if not candidates:
+            raise YabaiError(YabaiFailure.NO_NORMAL_SPACE, 'No normal destination Space is available.')
+        self.check_owner(identity, session)
+        self._command('-m', 'window', str(identity.window_id), '--space', str(candidates[0].index), deadline=deadline)
 
     def minimize(self, identity: WindowIdentity, session: SessionIdentity, desired: bool,
                  *, deadline: float | None = None) -> None:

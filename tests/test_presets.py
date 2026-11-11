@@ -105,7 +105,7 @@ class PresetTests(unittest.TestCase):
             root = Path(temp)
             extra = window(2, app='Other', fullscreen=True)
             fake, clock = FakeYabai(window(focused=True), extra), Clock()
-            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
             coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                              clock=clock, sleep=clock.sleep)
             layout = preset([{'app': 'Editor', 'device': B}])
@@ -122,7 +122,7 @@ class PresetTests(unittest.TestCase):
             root = Path(temp)
             fake, clock = FakeYabai(window(), window(2, app='Other')), Clock()
             fake.after_command = lambda operation: fake.windows.pop(2, None)
-            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
             coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                              timeout=1, clock=clock, sleep=clock.sleep)
             report = coordinator.apply_preset(preset([{'app': 'Editor', 'device': A}]))
@@ -133,7 +133,7 @@ class PresetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             fake, clock = FakeYabai(window()), Clock()
-            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
             coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                              clock=clock, sleep=clock.sleep)
             with self.assertRaises(PresetError):

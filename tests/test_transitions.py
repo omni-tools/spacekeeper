@@ -53,7 +53,7 @@ class TransitionTests(unittest.TestCase):
 
     def engine(self, desktop):
         clock = Clock()
-        adapter = Yabai(executable="/synthetic/yabai", runner=desktop, identities=desktop, clock=clock)
+        adapter = Yabai(executable="/synthetic/yabai", runner=desktop, identities=desktop, fullscreen_setter=desktop, clock=clock)
         return WindowTransitions(adapter, transition_timeout=1, poll_interval=0.1, clock=clock, sleep=clock.sleep)
 
     def target(self, *, fullscreen=True, display=A):

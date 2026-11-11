@@ -1,5 +1,6 @@
 """Restore coordination: global exclusion, backup first, final verification."""
 
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 import fcntl
@@ -10,12 +11,13 @@ import time
 from typing import TYPE_CHECKING, Callable
 
 from spacekeeper.identity import IdentityUnavailable
+from spacekeeper.execution import OptimisticTransitions
 from spacekeeper.matching import WindowRule
 from spacekeeper.planner import DecisionStatus, Reason, RestorePlan, RestoreSelection, WindowTarget, plan_restore
 from spacekeeper.snapshot import Snapshot, WindowIdentity
 from spacekeeper.space_order import SpaceOrderError, resolve_order
 from spacekeeper.storage import SnapshotStore
-from spacekeeper.transitions import Desktop, TransitionStatus, WindowTransitions
+from spacekeeper.transitions import Desktop, TransitionStatus
 from spacekeeper.yabai import YabaiError, YabaiFailure
 
 if TYPE_CHECKING:
@@ -126,8 +128,7 @@ class RestoreCoordinator:
         self.timeout, self.interval, self.clock, self.sleep = timeout, poll_interval, clock, sleep
         self.on_backup = on_backup
         self.on_plan = on_plan
-        self.transitions = WindowTransitions(desktop, transition_timeout=timeout, poll_interval=poll_interval,
-                                             clock=clock, sleep=sleep)
+        self.execution = OptimisticTransitions(desktop, timeout=timeout, interval=poll_interval, clock=clock, sleep=sleep)
 
     def _observe(self, deadline: float) -> Snapshot:
         last_error = None
@@ -155,27 +156,43 @@ class RestoreCoordinator:
             return False
         return window.focused and any(s.id == window.space_id and s.visible and s.focused for s in snapshot.spaces)
 
-    def _focus(self, identity: WindowIdentity, session, display_uuid: str | None) -> None:
-        deadline = self.clock() + self.timeout
-        initial = self.desktop.focus(identity, session, deadline=deadline)
-        consecutive = int(initial is not None and initial.focus_ready and
-                          (display_uuid is None or initial.window.display_uuid == display_uuid))
-        if consecutive:
-            self.sleep(min(self.interval, max(0, deadline - self.clock())))
+    def _focus(self, identity: WindowIdentity, session, display_uuid: str | None, *, force: bool = False,
+               deadline: float | None = None) -> None:
+        deadline = min(self.clock() + self.timeout, deadline) if deadline is not None else self.clock() + self.timeout
         while self.clock() < deadline:
             try:
-                observed = self.desktop.observe_window(identity, session, deadline=deadline)
-                matches = observed.focus_ready and (
-                    display_uuid is None or observed.window.display_uuid == display_uuid)
-                consecutive = consecutive + 1 if matches else 0
+                self.desktop.request_focus(identity, session, deadline=deadline, force=force)
+                return  # Final global verification confirms focus and visibility.
             except YabaiError as error:
-                if error.reason not in (YabaiFailure.DESKTOP_CHANGED, YabaiFailure.WINDOW_MISSING):
+                if error.reason not in (YabaiFailure.DESKTOP_CHANGED, YabaiFailure.WINDOW_MISSING,
+                                        YabaiFailure.WINDOW_STATE_CHANGED):
                     raise
-                consecutive = 0
-            if consecutive == 2 and self.clock() < deadline:
-                return
             self.sleep(min(self.interval, max(0, deadline - self.clock())))
         raise YabaiError(YabaiFailure.TIMEOUT, "Focus/visibility restoration was not confirmed.")
+
+    @staticmethod
+    def _eligible(outcomes):
+        return {o.window_id for o in outcomes if o.status in ('pending', 'restored', 'unchanged')}
+
+    def _restore_views(self, plan, session, eligible, *, force=False, deadline=None):
+        issues, last_focused = [], None
+        for target in sorted(plan.visible, key=lambda t: t.identity == plan.focus):
+            if target.identity.window_id not in eligible:
+                continue
+            try:
+                self._focus(target.identity, session, target.display_uuid, force=force, deadline=deadline)
+                last_focused = target.identity
+            except (YabaiError, IdentityUnavailable) as error:
+                last_focused = None
+                issues.append(RestoreIssue('visibility', _reason(error), target.identity.window_id, target.display_uuid))
+                if isinstance(error, YabaiError) and error.reason == YabaiFailure.SESSION_CHANGED:
+                    return issues
+        if plan.focus is not None and plan.focus.window_id in eligible and last_focused != plan.focus:
+            try:
+                self._focus(plan.focus, session, None, force=force, deadline=deadline)
+            except (YabaiError, IdentityUnavailable) as error:
+                issues.append(RestoreIssue('focus', _reason(error), plan.focus.window_id))
+        return issues
 
     def restore(self, saved: Snapshot, *, preserve: tuple[WindowRule, ...] = (), fallback: bool = True,
                 minimize: bool = True, ignore_position: bool = False, fullscreen: bool = True,
@@ -196,7 +213,21 @@ class RestoreCoordinator:
                 observed = self._observe(deadline)
                 if observed.session != session:
                     raise YabaiError(YabaiFailure.SESSION_CHANGED, 'The graphical session has changed.')
-                spaces = resolve_order(order, observed)
+                while True:
+                    try:
+                        spaces = resolve_order(order, observed)
+                        break
+                    except SpaceOrderError as error:
+                        pending_gap = (error.reason == 'missing_or_changed_owner' and
+                                       not any(w.id == error.window_id for w in observed.windows) and
+                                       any(o.window_id == error.window_id and o.status == 'pending' for o in outcomes))
+                        if (error.reason != 'fullscreen_order_target_changed' and not pending_gap) or self.clock() >= deadline:
+                            raise
+                        # Optimistic fullscreen requests may still be settling.
+                        self.sleep(min(self.interval, max(0, deadline - self.clock())))
+                        observed = self._observe(deadline)
+                        if observed.session != session:
+                            raise YabaiError(YabaiFailure.SESSION_CHANGED, 'The graphical session has changed.')
                 for index in range(1, len(spaces)):
                     window_id = order.windows[index][0].window_id
                     if spaces[index].index > spaces[index - 1].index:
@@ -246,6 +277,7 @@ class RestoreCoordinator:
                                                 item.source_window_id)
                                     for item in plan.issues]
             session_changed = False
+            confirmed = Counter()
             saved_ids = {window.id for window in saved.windows}
             protected_saved = {window.id for window in saved.windows if window.sticky or not window.root_window or
                                (window.role, window.subrole) != ('AXWindow', 'AXStandardWindow')}
@@ -256,7 +288,7 @@ class RestoreCoordinator:
                                                       decision.monitor_fallback, source_window_id=decision.source_window_id,
                                                       match_method=decision.match_method))
                     elif decision.status == DecisionStatus.PLANNED and decision.target is not None:
-                        result = self.transitions.apply(decision.target, before.session)
+                        result = self.execution.apply(decision.target, before.session, before)
                         status = "restored" if result.status == TransitionStatus.VERIFIED else result.status.value
                         outcomes.append(WindowOutcome(decision.window_id, status, result.reason or decision.reason.value,
                                                       decision.monitor_fallback, result.attempted_operations,
@@ -274,41 +306,75 @@ class RestoreCoordinator:
                     order_issues = self._restore_order(plan, before.session, outcomes)
                     issues.extend(order_issues)
                     session_changed = any(i.reason == YabaiFailure.SESSION_CHANGED for i in order_issues)
-                eligible = {outcome.window_id for outcome in outcomes if outcome.status in ("restored", "unchanged")}
+                eligible = self._eligible(outcomes)
                 already_matches = (not any(d.status == DecisionStatus.PLANNED for d in plan.windows) and
                                    not self._verify(plan, before, before))
                 if not session_changed and not already_matches:
-                    # Make the final focused window the last visibility operation
-                    # when possible, then reuse its just-confirmed focus result.
-                    visible = sorted(plan.visible, key=lambda target: target.identity == plan.focus)
-                    last_focused = None
-                    for target in visible:
-                        if target.identity.window_id not in eligible:
-                            continue
-                        try:
-                            self._focus(target.identity, before.session, target.display_uuid)
-                            last_focused = target.identity
-                        except (YabaiError, IdentityUnavailable) as error:
-                            last_focused = None
-                            issues.append(RestoreIssue("visibility", _reason(error), target.identity.window_id,
-                                                       target.display_uuid))
-                            if isinstance(error, YabaiError) and error.reason == YabaiFailure.SESSION_CHANGED:
-                                session_changed = True
-                                break
-                    if (not session_changed and plan.focus is not None and plan.focus.window_id in eligible and
-                            last_focused != plan.focus):
-                        try:
-                            self._focus(plan.focus, before.session, None)
-                        except (YabaiError, IdentityUnavailable) as error:
-                            issues.append(RestoreIssue("focus", _reason(error), plan.focus.window_id))
+                    view_issues = self._restore_views(plan, before.session, eligible)
+                    issues.extend(view_issues)
+                    session_changed = any(i.reason == YabaiFailure.SESSION_CHANGED for i in view_issues)
 
                 try:
                     deadline, stable = self.clock() + self.timeout, 0
                     remaining = [RestoreIssue("verification", "timeout")]
+                    repaired = set()
+                    mismatches = Counter()
+                    focus_repaired = False
                     while self.clock() < deadline:
                         final = self._observe(deadline)
                         remaining = self._verify(plan, before, final)
-                        stable = stable + 1 if not remaining else 0
+                        invalid = {i.window_id for i in remaining}
+                        for decision in plan.windows:
+                            if decision.target is not None:
+                                wid = decision.window_id
+                                confirmed[wid] = confirmed[wid] + 1 if wid not in invalid and None not in invalid else 0
+                        # One bounded repair pass uses actual state, never the
+                        # predicted state or a blind fullscreen toggle.
+                        current_mismatches = {i.window_id for i in remaining if i.reason == 'window_target_mismatch'}
+                        for decision in plan.windows:
+                            wid = decision.window_id
+                            mismatches[wid] = mismatches[wid] + 1 if wid in current_mismatches else 0
+                        # Let an asynchronous request settle across two global
+                        # samples before spending its one repair attempt.
+                        repair_ids = {wid for wid in current_mismatches if mismatches[wid] >= 2} - repaired
+                        repaired.update(repair_ids)
+                        repair_targets = [d.target for d in plan.windows if d.target is not None and
+                                          d.window_id in repair_ids and any(
+                                              o.window_id == d.window_id and o.status in ('pending', 'failed')
+                                              for o in outcomes)]
+                        if repair_targets and final.session == before.session:
+                            for target in repair_targets:
+                                result = self.execution.apply(target, before.session, final, deadline=deadline)
+                                outcomes = [replace(o, status=result.status.value, reason=result.reason or o.reason,
+                                                    attempted_operations=o.attempted_operations + result.attempted_operations)
+                                            if o.window_id == target.identity.window_id else o for o in outcomes]
+                                if result.reason == YabaiFailure.SESSION_CHANGED:
+                                    session_changed = True
+                                    break
+                            if not session_changed:
+                                if plan.fullscreen_order and not any(
+                                        i.scope == 'ordering' and i.reason == YabaiFailure.CAPABILITY_UNAVAILABLE
+                                        for i in issues):
+                                    issues.extend(self._restore_order(plan, before.session, outcomes))
+                                eligible = self._eligible(outcomes)
+                                issues.extend(self._restore_views(plan, before.session, eligible, deadline=deadline))
+                            stable = 0
+                            self.sleep(min(self.interval, max(0, deadline - self.clock())))
+                            continue
+                        focus_mismatch = any(i.reason in ('focused_window_mismatch', 'visible_window_mismatch')
+                                             for i in remaining)
+                        if focus_mismatch and not focus_repaired and final.session == before.session:
+                            focus_repaired = True
+                            issues.extend(self._restore_views(plan, before.session, eligible,
+                                                              force=True, deadline=deadline))
+                            stable = 0
+                            self.sleep(min(self.interval, max(0, deadline - self.clock())))
+                            continue
+                        terminal_order_failure = any(i.scope == 'ordering' and
+                                                     i.reason == YabaiFailure.CAPABILITY_UNAVAILABLE for i in issues)
+                        pending = [i for i in remaining if not (
+                            terminal_order_failure and i.reason == 'fullscreen_order_mismatch')]
+                        stable = stable + 1 if not pending else 0
                         if stable == 2:
                             break
                         self.sleep(min(self.interval, max(0, deadline - self.clock())))
@@ -320,9 +386,22 @@ class RestoreCoordinator:
                     issues.append(RestoreIssue("verification", _reason(error)))
 
             failed_ids = {issue.window_id for issue in issues if issue.scope == "verification" and issue.window_id is not None}
-            outcomes = [replace(outcome, status="failed", reason="final_state_mismatch")
-                        if outcome.window_id in failed_ids and outcome.status in ("restored", "unchanged")
-                        else outcome for outcome in outcomes]
+            verified_outcomes = []
+            for outcome in outcomes:
+                verified = confirmed[outcome.window_id] >= 2
+                if outcome.window_id in failed_ids and outcome.status in ('restored', 'unchanged', 'pending'):
+                    outcome = replace(outcome, status='failed', reason='final_state_mismatch')
+                elif outcome.status == 'pending':
+                    outcome = (replace(outcome, status='restored') if verified else
+                               replace(outcome, status='failed', reason='final_verification_incomplete'))
+                elif outcome.status == 'failed' and verified and outcome.reason in (
+                        YabaiFailure.COMMAND_FAILED, YabaiFailure.TIMEOUT, YabaiFailure.WINDOW_STATE_CHANGED,
+                        YabaiFailure.FOCUS_CHANGED):
+                    # IPC failure is not proof that an edit did not take effect.
+                    # Two complete observations can resolve that uncertainty.
+                    outcome = replace(outcome, status='restored', reason='verified_after_command_error')
+                verified_outcomes.append(outcome)
+            outcomes = verified_outcomes
             complete = plan.accepted and not issues and all(o.status in ("restored", "unchanged", "excluded") for o in outcomes)
             report = RestoreReport(complete, str(backup), str(self.store.root / "reports" / backup.name),
                                    tuple(outcomes), tuple(issues), plan.name_fallback)

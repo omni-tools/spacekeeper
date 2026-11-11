@@ -44,7 +44,7 @@ class RestoreTests(unittest.TestCase):
 
     def coordinator(self, desktop, store=None):
         clock = Clock()
-        adapter = Yabai(executable='/synthetic/yabai', runner=desktop, identities=desktop, clock=clock)
+        adapter = Yabai(executable='/synthetic/yabai', runner=desktop, identities=desktop, fullscreen_setter=desktop, clock=clock)
         return RestoreCoordinator(adapter, store or self.store, lock_path=self.lock, timeout=1,
                                   poll_interval=0.1, clock=clock, sleep=clock.sleep)
 
@@ -179,7 +179,7 @@ class RestoreTests(unittest.TestCase):
         desktop.effects['focus'] = False
         report = self.coordinator(desktop).restore(observe(window(focused=True)))
         self.assertFalse(report.complete)
-        self.assertTrue(any(i.scope in ('focus', 'visibility') for i in report.issues))
+        self.assertTrue(any(i.reason in ('focused_window_mismatch', 'visible_window_mismatch') for i in report.issues))
 
     def test_matching_shortcut_still_detects_new_fullscreen_windows_in_final_verification(self):
         desktop = FakeYabai(window(focused=True))
@@ -200,17 +200,17 @@ class RestoreTests(unittest.TestCase):
         self.assertTrue(report.complete, report)
         self.assertEqual(focus.call_count, 1)
 
-    def test_focus_verification_tolerates_a_temporary_target_query_gap(self):
+    def test_focus_request_tolerates_a_temporary_target_query_gap(self):
         desktop = FakeYabai(window())
         coordinator = self.coordinator(desktop)
-        original = coordinator.desktop.observe_window
+        original = coordinator.desktop.query
         gaps = []
         def gap(*args, **options):
-            if desktop.commands and not gaps:
+            if options.get('window_id') is not None and not gaps:
                 gaps.append(True)
                 raise YabaiError(YabaiFailure.WINDOW_MISSING, 'Synthetic focus animation.')
             return original(*args, **options)
-        coordinator.desktop.observe_window = gap
+        coordinator.desktop.query = gap
         report = coordinator.restore(observe(window(focused=True)))
         self.assertTrue(report.complete, report)
         self.assertEqual(gaps, [True])

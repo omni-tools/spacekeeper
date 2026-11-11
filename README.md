@@ -95,6 +95,14 @@ windows saved outside it. Monitor and fullscreen changes happen before final
 minimization; a minimized target is never focused for final visibility. Hidden
 apps and protected/system windows remain unsupported.
 
+Restore shares its initial observation across window edits and confirms results
+globally at the end. Independent Dock-state changes share confirmation;
+fullscreen and display changes remain sequential, with readiness checks before
+dependent moves. Fullscreen requests explicitly set the macOS Accessibility
+state on or off. An accepted request stays provisional until verified, and a
+mismatch can receive one guarded repair attempt. Accessibility permission
+failures are reported without falling back to a fullscreen toggle.
+
 Restore also puts matched fullscreen Spaces in their saved relative order within
 each display, after restoring displays and states. Ordinary desktops keep their
 relative order; absolute Space slots are not restored. Reordering requires

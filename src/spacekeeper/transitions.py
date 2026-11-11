@@ -32,9 +32,18 @@ class Desktop(Protocol):
     def move_fullscreen_space_after(self, members: tuple[WindowIdentity, ...],
                                     predecessor: tuple[WindowIdentity, ...], session: SessionIdentity,
                                     display_uuid: str, *, deadline: float | None = None) -> None: ...
+    def request_focus(self, identity: WindowIdentity, session: SessionIdentity,
+                      *, deadline: float | None = None, force: bool = False) -> None: ...
+    def request_fullscreen(self, identity: WindowIdentity, session: SessionIdentity, desired: bool,
+                           *, deadline: float | None = None) -> None: ...
+    def request_minimize(self, identity: WindowIdentity, session: SessionIdentity, desired: bool,
+                         *, deadline: float | None = None) -> None: ...
+    def request_move_to_display(self, identity: WindowIdentity, session: SessionIdentity, display_uuid: str,
+                                observed: WindowObservation, *, deadline: float | None = None) -> None: ...
 
 
 class TransitionStatus(StrEnum):
+    PENDING = "pending"
     VERIFIED = "verified"
     FAILED = "failed"
     SKIPPED = "skipped"

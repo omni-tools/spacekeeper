@@ -89,7 +89,7 @@ class SingleWindowFallbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             helper = window(10, sticky=True, subrole='AXDialog')
             fake, clock = FakeYabai(window(9, title='New'), helper), Clock()
-            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
             root = Path(temp)
             coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                              timeout=1, clock=clock, sleep=clock.sleep)
@@ -104,7 +104,7 @@ class SingleWindowFallbackTests(unittest.TestCase):
     def test_owner_change_after_app_binding_prevents_all_commands(self):
         with tempfile.TemporaryDirectory() as temp:
             fake, clock = FakeYabai(window(9, title='New')), Clock()
-            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
             root = Path(temp)
             def replace_owner(plan):
                 fake.windows[9] = replace(fake.windows[9], owner=ProcessIdentity(109, 2_000_000, 0))

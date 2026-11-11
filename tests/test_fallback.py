@@ -79,7 +79,7 @@ class NameFallbackTests(unittest.TestCase):
             root = Path(temp)
             saved = observe(window(app='Code', title='old.py — Workspace', minimized=True), session=STALE)
             fake, clock = FakeYabai(window(9, app='Code', title='new.py — Workspace')), Clock()
-            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
             coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                              timeout=1, clock=clock, sleep=clock.sleep)
             report = coordinator.restore(saved)
@@ -107,7 +107,7 @@ class NameFallbackTests(unittest.TestCase):
             fake, clock = FakeYabai(window(9, title='Left', focused=True),
                                     window(10, title='Right', fullscreen=True)), Clock()
             fake.displays, fake.normal_displays = DISPLAYS[:1], (A,)
-            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
             coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                              timeout=1, clock=clock, sleep=clock.sleep)
             report = coordinator.restore(saved)
@@ -189,7 +189,7 @@ class NameFallbackTests(unittest.TestCase):
             saved = observe(window(fullscreen=True, display=B, focused=True), session=STALE)
             untouched = window(1, app='Other', fullscreen=True)
             fake, clock = FakeYabai(untouched, window(9, focused=True)), Clock()
-            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
             coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                              clock=clock, sleep=clock.sleep)
             report = coordinator.restore(saved)
@@ -207,7 +207,7 @@ class NameFallbackTests(unittest.TestCase):
             fake, clock = FakeYabai(window(9)), Clock()
             fake.after_command = lambda operation: fake.windows.update({
                 9: replace(fake.windows[9], owner=ProcessIdentity(109, 2_000_000, 0))})
-            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
             coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                              timeout=1, clock=clock, sleep=clock.sleep)
             report = coordinator.restore(observe(window(fullscreen=True), session=STALE))
@@ -222,7 +222,7 @@ class NameFallbackTests(unittest.TestCase):
             def changed(operation):
                 fake.windows[1] = replace(fake.windows[1], fullscreen=False, space_id=101)
             fake.after_command = changed
-            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
             coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                              timeout=1, clock=clock, sleep=clock.sleep)
             report = coordinator.restore(observe(window(fullscreen=True, focused=True), session=STALE))

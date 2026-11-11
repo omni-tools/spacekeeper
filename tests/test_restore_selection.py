@@ -26,7 +26,7 @@ class RestoreSelectionTests(unittest.TestCase):
 
     def coordinator(self, fake):
         clock = Clock()
-        return RestoreCoordinator(Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock),
+        return RestoreCoordinator(Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock),
                                   SnapshotStore(self.root / 'state'), lock_path=self.root / 'lock/restore',
                                   timeout=1, clock=clock, sleep=clock.sleep, poll_interval=0.1)
 

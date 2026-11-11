@@ -30,14 +30,14 @@ Snapshot targets explicitly include minimized state, in both original-session an
 
 Use the verified monitor-first sequence for a fullscreen window on the wrong monitor:
 
-1. Exit fullscreen if necessary and confirm completion.
+1. Request fullscreen off if necessary. Wait for completion when the following move depends on it.
 2. Re-resolve a normal Space on the target monitor and move the window there.
-3. Focus that window; verify both focus and target monitor.
-4. Enter fullscreen and verify both fullscreen state and monitor UUID.
+3. Confirm the target monitor before fullscreen entry, then request focus.
+4. Set fullscreen on explicitly. Confirm fullscreen, monitor, visibility, and focus in final verification.
 
 The same sequence applies when entering fullscreen on a connected saved monitor. A native fullscreen Space cannot receive an ordinary window. If no normal destination exists, report the window as unrestored; v0 must not invent a different destination or require SA to create a Space.
 
-When turning fullscreen off, use the existing normal desktop; v0 does not promise exact Space identity, desktop index, or frame coordinates. Native fullscreen creates/removes Spaces, so their IDs and Mission Control indexes may change. Re-resolve identities before each mutation, and poll state with bounded waits instead of trusting command exit status or fixed delays alone.
+When turning fullscreen off, use the existing normal desktop; v0 does not promise exact Space identity, desktop index, or frame coordinates. Native fullscreen creates/removes Spaces, so their IDs and Mission Control indexes may change. Re-resolve indexes before moves. Use bounded readiness checks at dependent steps; successful edit requests remain provisional until global verification.
 
 Restore the saved visible window on each available monitor and final focus last where surviving identities permit it. If the final focused window falls back from a disconnected monitor, its visibility takes precedence on its current monitor; do not require a different saved Space to remain visible on the same monitor. Verify final state and report unsupported, skipped, failed, and successfully restored items separately. Missing SA is expected in v0: there is no Space-order promise and no automatic installation, privilege change, SIP change, or Recovery operation.
 
@@ -45,7 +45,11 @@ Restore the saved visible window on each available monitor and final focus last 
 
 Keep focus/fullscreen changes and Space-related operations sequential: global focus and changing Space indexes make concurrent mutations unsafe. Parallelize read-only snapshot queries. Independent frame moves/resizes can use up to four workers in a future frame-restoration feature, with per-window command order preserved. Current prototypes demonstrate this; no speedup has been measured.
 
-Full observations are required for capture, the pre-restore backup, planning, and final verification. During edits, query only the affected window and fresh display/Space topology. Keep coherent double reads, fresh session/process ownership, focus checks before fullscreen toggles, stable transition polling, and destination index resolution immediately before a move. Reuse a just-confirmed transition or focus result when no intervening operation invalidated it. An already-matching plan can skip intermediate focus work, but success still requires two full final observations. No observation is cached across restore invocations.
+Full observations are required for capture, the pre-restore backup, planning, and final verification. Each full observation retains coherent double reads. Seed all edits from the shared pre-restore observation. Issue sequential optimistic requests with a lightweight targeted window check and fresh session/process ownership around each request. Independent minimized-state requests share final confirmation rather than polling each window separately. Refresh scoped display/Space topology only for dependency readiness and destination resolution before moves; keep order moves guarded by fresh live indexes.
+
+Restore uses macOS Accessibility to set `AXFullScreen` explicitly true or false on the window selected by native ID and owning PID. It rechecks process/session identity after AX enumeration, immediately before setting the attribute. Fullscreen requests do not toggle or require Hammerspoon. An accepted setter/request is not proof that the edit completed; outcomes stay pending internally. Final focus/visibility requests also defer confirmation to global verification. A matching plan skips unnecessary intermediate focus work. Successful targets require two full final observations; no observation or AX window reference is cached across restores.
+
+The first final verification may trigger one guarded repair attempt per mismatched window, using freshly observed state and explicit state requests. Failed session/owner checks, unsupported windows and permission/capability failures cannot authorize repairs. A permanent ordering capability failure remains an incomplete result with the final order mismatch reported, but does not hold other final checks open for the entire timeout.
 
 Default runtime storage:
 

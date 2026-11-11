@@ -22,7 +22,7 @@ class SpaceOrderTests(unittest.TestCase):
         self.fake = FakeYabai(*self.saved.windows)
         self.fake.space_indexes = {1001: 5, 1002: 4, 1003: 3}
         self.clock = Clock()
-        self.adapter = Yabai(executable='/synthetic/yabai', runner=self.fake, identities=self.fake, clock=self.clock)
+        self.adapter = Yabai(executable='/synthetic/yabai', runner=self.fake, identities=self.fake, fullscreen_setter=self.fake, clock=self.clock)
         self.coordinator = RestoreCoordinator(self.adapter, SnapshotStore(self.root / 'state'),
                                               lock_path=self.root / 'lock/restore', timeout=1,
                                               clock=self.clock, sleep=self.clock.sleep, poll_interval=0.1)

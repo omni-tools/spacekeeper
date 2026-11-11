@@ -24,7 +24,7 @@ class MinimizedRestoreTests(unittest.TestCase):
                 ignored = window(ignored_id, title='Dock target', fullscreen=True)
                 fake, clock = FakeYabai(ignored, window(visible_id, title='Keep visible', focused=True)), Clock()
                 root = Path(temp)
-                adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+                adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
                 coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                                  timeout=1, clock=clock, sleep=clock.sleep)
                 report = coordinator.restore(saved, minimize=False)
@@ -62,7 +62,7 @@ class MinimizedRestoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             fake, clock = FakeYabai(window(minimized=True)), Clock()
             root = Path(temp)
-            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+            adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
             coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                              timeout=1, clock=clock, sleep=clock.sleep)
             report = coordinator.restore(observe(window(focused=True)), minimize=False)
@@ -73,7 +73,7 @@ class MinimizedRestoreTests(unittest.TestCase):
 
     def engine(self, fake):
         clock = Clock()
-        adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+        adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
         return WindowTransitions(adapter, transition_timeout=1, poll_interval=0.1, clock=clock, sleep=clock.sleep)
 
     def test_saved_dock_state_is_applied_in_original_and_stale_sessions(self):
@@ -85,7 +85,7 @@ class MinimizedRestoreTests(unittest.TestCase):
                 target_id, focus_id = (9, 10) if stale else (1, 2)
                 fake, clock = FakeYabai(window(target_id, title='Dock target'),
                                         window(focus_id, title='Keep visible', focused=True)), Clock()
-                adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, clock=clock)
+                adapter = Yabai(executable='/synthetic/yabai', runner=fake, identities=fake, fullscreen_setter=fake, clock=clock)
                 root = Path(temp)
                 coordinator = RestoreCoordinator(adapter, SnapshotStore(root/'state'), lock_path=root/'lock/restore.lock',
                                                  timeout=1, clock=clock, sleep=clock.sleep)

@@ -199,7 +199,7 @@ class CliTests(unittest.TestCase):
         self.state, self.config = self.root / 'state', self.root / 'config'
         self.runner, self.clock = CliRunner(), Clock()
         self.device = FakeYabai(window(focused=True))
-        adapter = Yabai(executable='/synthetic/yabai', runner=self.device, identities=self.device, clock=self.clock)
+        adapter = Yabai(executable='/synthetic/yabai', runner=self.device, identities=self.device, fullscreen_setter=self.device, clock=self.clock)
         factory = patch('spacekeeper.cli.Yabai', return_value=adapter)
         factory.start()
         self.addCleanup(factory.stop)

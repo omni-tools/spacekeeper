@@ -53,6 +53,20 @@ class FakeYabai:
                 raise IdentityUnavailable(IdentityFailure.PROCESS_MISSING, "Synthetic closed owner.")
             return value
 
+    def set_fullscreen(self, identity, desired, *, timeout, guard):
+        from spacekeeper.accessibility import AccessibilityError
+        with self.lock:
+            guard()
+            # A test-only protocol marker, not a yabai command-line option.
+            self.commands.append(('ax', 'window', str(identity.window_id), '--set-fullscreen', str(desired).lower()))
+            if 'toggle' in self.failures:
+                raise AccessibilityError('command_failed', 'Synthetic fullscreen failure.')
+            value = self.windows[identity.window_id]
+            if self.effects['toggle']:
+                space = 1000 + value.id if desired else (101 if value.display_uuid == A else 102)
+                self.windows[value.id] = replace(value, fullscreen=desired, space_id=space)
+            self.after_command('toggle')
+
     def raw(self):
         snapshot = observe(*self.windows.values(), displays=self.displays, normal_displays=self.normal_displays,
                            session=self.session_id)

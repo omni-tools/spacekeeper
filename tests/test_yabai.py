@@ -12,7 +12,7 @@ from tests.support import A, B, SESSION, window
 
 class AdapterTests(unittest.TestCase):
     def adapter(self, desktop):
-        return Yabai(executable="/synthetic/yabai", runner=desktop, identities=desktop)
+        return Yabai(executable="/synthetic/yabai", runner=desktop, identities=desktop, fullscreen_setter=desktop)
 
     def test_observation_normalizes_indexes_and_preserves_raw_metadata(self):
         desktop = FakeYabai(window(fullscreen=True, focused=True))
@@ -61,7 +61,7 @@ class AdapterTests(unittest.TestCase):
                 next(s for s in spaces if s['id'] == 102)['windows'].append(1)
                 return ProcessResult(0, json.dumps(spaces).encode(), b'')
             return result
-        snapshot = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop).observe()
+        snapshot = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop, fullscreen_setter=desktop).observe()
         self.assertEqual((snapshot.windows[0].space_id, snapshot.windows[0].display_uuid), (101, A))
         self.assertEqual(len([args for args in desktop.queries if '--window' in args]), 2)
 
@@ -74,7 +74,7 @@ class AdapterTests(unittest.TestCase):
                 data['pid'] += 1
                 return ProcessResult(0, json.dumps(data).encode(), b'')
             return result
-        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop)
+        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop, fullscreen_setter=desktop)
         with self.assertRaises(YabaiError) as caught:
             adapter.observe()
         self.assertEqual(caught.exception.reason, Failure.DESKTOP_CHANGED)
@@ -129,7 +129,7 @@ class AdapterTests(unittest.TestCase):
                 data[0]["is-native-fullscreen"] = "false"
                 return ProcessResult(0, json.dumps(data).encode(), b"")
             return result
-        adapter = Yabai(executable="/synthetic/yabai", runner=runner, identities=desktop)
+        adapter = Yabai(executable="/synthetic/yabai", runner=runner, identities=desktop, fullscreen_setter=desktop)
         with self.assertRaises(YabaiError) as caught:
             adapter.observe()
         self.assertEqual(caught.exception.reason, Failure.INVALID_RESPONSE)
@@ -161,7 +161,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_deadline_bounds_queries_and_expires_without_running_a_command(self):
         desktop, clock = FakeYabai(window()), Clock()
-        adapter = Yabai(executable="/synthetic/yabai", runner=desktop, identities=desktop, clock=clock)
+        adapter = Yabai(executable="/synthetic/yabai", runner=desktop, identities=desktop, fullscreen_setter=desktop, clock=clock)
         adapter.observe(deadline=0.5)
         self.assertTrue(all(timeout <= 0.5 for timeout in desktop.timeouts))
         clock.now = 1
@@ -281,7 +281,7 @@ class AdapterTests(unittest.TestCase):
                 data[0]['windows'] = 'bad membership'
                 return ProcessResult(0, json.dumps(data).encode(), b'')
             return result
-        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop)
+        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop, fullscreen_setter=desktop)
         with self.assertRaises(YabaiError) as caught:
             adapter.observe_window(window().identity, SESSION)
         self.assertEqual(caught.exception.reason, Failure.INVALID_RESPONSE)
@@ -296,7 +296,7 @@ class AdapterTests(unittest.TestCase):
                     space['windows'] = []
                 return ProcessResult(0, json.dumps(data).encode(), b'')
             return result
-        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop)
+        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop, fullscreen_setter=desktop)
         with self.assertRaises(YabaiError) as caught:
             adapter.focus(window().identity, SESSION)
         self.assertEqual(caught.exception.reason, Failure.DESKTOP_CHANGED)
@@ -312,7 +312,7 @@ class AdapterTests(unittest.TestCase):
                 data['is-native-fullscreen'] = 'false'
                 return ProcessResult(0, json.dumps(data).encode(), b'')
             return result
-        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop)
+        adapter = Yabai(executable='/synthetic/yabai', runner=runner, identities=desktop, fullscreen_setter=desktop)
         with self.assertRaises(YabaiError) as caught:
             adapter.observe_window(window().identity, SESSION)
         self.assertEqual(caught.exception.reason, Failure.INVALID_RESPONSE)
