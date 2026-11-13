@@ -61,6 +61,7 @@ class AccessibilityTests(unittest.TestCase):
         with self.assertRaises(AccessibilityError) as error:
             self.setter.set_fullscreen(window().identity, True, timeout=1, guard=lambda: None)
         self.assertEqual(error.exception.reason, 'window_missing')
+        self.assertEqual(error.exception.stage, 'fullscreen.ax_window_lookup')
         self.assertEqual(self.writes, [])
 
     def test_permission_failure_does_not_allocate_or_write(self):
@@ -68,6 +69,7 @@ class AccessibilityTests(unittest.TestCase):
         with self.assertRaises(AccessibilityError) as error:
             self.setter.set_fullscreen(window().identity, True, timeout=1, guard=lambda: None)
         self.assertEqual(error.exception.reason, 'access_denied')
+        self.assertEqual(error.exception.stage, 'fullscreen.permission')
         self.assertEqual(self.writes, [])
         self.assertEqual(self.released, [])
 
@@ -76,6 +78,7 @@ class AccessibilityTests(unittest.TestCase):
         with self.assertRaises(AccessibilityError) as error:
             self.setter.set_fullscreen(window().identity, True, timeout=1, guard=lambda: None)
         self.assertEqual(error.exception.reason, 'timeout')
+        self.assertEqual(error.exception.stage, 'fullscreen.ax_window_lookup')
         self.assertEqual(self.writes, [])
         self.assertEqual(self.released, [301, 402, 401, 101])
 
@@ -84,11 +87,13 @@ class AccessibilityTests(unittest.TestCase):
         with self.assertRaises(AccessibilityError) as error:
             self.setter.set_fullscreen(window().identity, True, timeout=1, guard=lambda: None)
         self.assertEqual(error.exception.reason, 'invalid_response')
+        self.assertEqual(error.exception.stage, 'fullscreen.ax_windows')
         self.assertEqual(self.writes, [])
         self.array_type, self.status = 7, -25211
         with self.assertRaises(AccessibilityError) as error:
             self.setter.set_fullscreen(window().identity, False, timeout=1, guard=lambda: None)
         self.assertEqual(error.exception.reason, 'access_denied')
+        self.assertEqual(error.exception.stage, 'fullscreen.ax_set_attribute')
 
     def test_rejects_non_boolean_and_invalid_timeout(self):
         for desired, timeout in ((1, 1), (True, 0), (False, float('inf'))):

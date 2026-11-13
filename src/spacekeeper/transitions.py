@@ -56,6 +56,7 @@ class TransitionResult:
     status: TransitionStatus
     reason: str | None
     attempted_operations: tuple[str, ...]
+    failure_stage: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

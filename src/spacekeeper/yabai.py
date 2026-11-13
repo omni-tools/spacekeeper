@@ -66,10 +66,12 @@ class YabaiFailure(StrEnum):
 
 
 class YabaiError(RuntimeError):
-    def __init__(self, reason: YabaiFailure, message: str, *, returncode: int | None = None):
+    def __init__(self, reason: YabaiFailure, message: str, *, returncode: int | None = None,
+                 stage: str | None = None):
         super().__init__(message)
         self.reason = reason
         self.returncode = returncode
+        self.stage = stage
 
 
 def resolve_yabai(executable: str | None = None) -> str:
@@ -303,9 +305,9 @@ class Yabai:
 
     def check_owner(self, identity: WindowIdentity, session: SessionIdentity) -> None:
         if self.identities.session() != session:
-            raise YabaiError(YabaiFailure.SESSION_CHANGED, 'The graphical session has changed.')
+            raise YabaiError(YabaiFailure.SESSION_CHANGED, 'The graphical session has changed.', stage='owner.session')
         if self.identities.process(identity.owner.pid) != identity.owner:
-            raise YabaiError(YabaiFailure.OWNER_CHANGED, 'The window process has changed.')
+            raise YabaiError(YabaiFailure.OWNER_CHANGED, 'The window process has changed.', stage='owner.process')
 
     def _request_guard(self, identity: WindowIdentity, session: SessionIdentity,
                        deadline: float | None, *, allow_minimized: bool = False,
@@ -316,8 +318,12 @@ class Yabai:
         results globally; callers must refresh topology at dependent moves.
         """
         self.check_owner(identity, session)
-        raw = self.query('windows', window_id=identity.window_id, deadline=deadline,
-                         properties='id,pid,role,subrole,root-window,is-hidden,is-sticky,is-minimized,has-focus')[0]
+        try:
+            raw = self.query('windows', window_id=identity.window_id, deadline=deadline,
+                             properties='id,pid,role,subrole,root-window,is-hidden,is-sticky,is-minimized,has-focus')[0]
+        except YabaiError as error:
+            error.stage = error.stage or 'window.query'
+            raise
         self.check_owner(identity, session)
         try:
             if raw['pid'] != identity.owner.pid:
@@ -378,7 +384,8 @@ class Yabai:
             self.fullscreen_setter.set_fullscreen(identity, desired, timeout=timeout,
                                                  guard=lambda: self.check_owner(identity, session))
         except AccessibilityError as error:
-            raise YabaiError(YabaiFailure(error.reason), str(error)) from error
+            raise YabaiError(YabaiFailure(error.reason), str(error),
+                             stage=error.stage or 'fullscreen.native') from error
 
     def request_move_to_display(self, identity: WindowIdentity, session: SessionIdentity, display_uuid: str,
                                 observed: WindowObservation, *, deadline: float | None = None) -> None:

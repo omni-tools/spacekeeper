@@ -192,13 +192,16 @@ def emit_details(report):
             click.echo(f'Window {window.window_id}: saved monitor disconnected; using its current monitor.')
         if window.status not in ('restored', 'unchanged', 'excluded'):
             click.echo(f'Window {window.window_id}: {window.status} ({window.reason}).')
+        for failure in window.failures:
+            click.echo(f'Window {window.window_id}: {failure.stage} failed ({failure.reason}).')
     for issue in report.issues:
         locations = []
         if issue.source_window_id is not None:
             locations.append(f'snapshot window {issue.source_window_id}')
         if issue.window_id is not None:
             locations.append(f'window {issue.window_id}')
-        click.echo(f'{issue.scope}: {issue.reason}' + (' (' + ', '.join(locations) + ')' if locations else ''))
+        click.echo(f'{issue.scope}: {issue.reason}' + (' (' + ', '.join(locations) + ')' if locations else '') +
+                   (f' [{issue.stage}]' if issue.stage else ''))
     click.echo(f'Report: {report.report_path}')
 
 

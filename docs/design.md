@@ -51,6 +51,22 @@ Restore uses macOS Accessibility to set `AXFullScreen` explicitly true or false 
 
 The first final verification may trigger one guarded repair attempt per mismatched window, using freshly observed state and explicit state requests. Failed session/owner checks, unsupported windows and permission/capability failures cannot authorize repairs. A permanent ordering capability failure remains an incomplete result with the final order mismatch reported, but does not hold other final checks open for the entire timeout.
 
+This repair also covers `window_missing` outcomes classified as skipped when two
+fresh global samples find the original owner/window identity with a persistent
+target mismatch. Recheck ownership and support immediately before the repair;
+never retry a genuinely absent/replaced window or bypass a protected-window or
+permission refusal. Keep the original failure reason/stage in private diagnostic
+history, and replace the stale outcome reason after successful recovery.
+
+Ordering groups containing failed, skipped or unsupported fullscreen targets are
+reported as `fullscreen_order_blocked` without waiting for those edits to complete.
+After a guarded repair, reassess the blocked groups; a recovered group must not
+retain a provisional blocked issue. A terminal failed lookup after its one repair
+cannot hold healthy windows' final confirmation open for the entire timeout.
+Retain all final mismatches and incomplete outcomes; this is not a successful
+restore of the blocked targets. Diagnostics distinguish targeted window queries,
+focus/readiness, native AX window enumeration/lookup and the attribute setter.
+
 Default runtime storage:
 
 - Snapshots/backups: `~/.local/state/spacekeeper`.

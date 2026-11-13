@@ -14,16 +14,18 @@ from spacekeeper.snapshot import WindowIdentity
 
 
 class AccessibilityError(RuntimeError):
-    def __init__(self, reason: str, message: str):
+    def __init__(self, reason: str, message: str, *, stage: str | None = None):
         super().__init__(message)
         self.reason = reason
+        self.stage = stage
 
 
 class FullscreenSetter:
     def __init__(self, *, clock: Callable[[], float] = time.monotonic):
         self.clock = clock
         if sys.platform != 'darwin':
-            raise AccessibilityError('capability_unavailable', 'Fullscreen changes require macOS Accessibility.')
+            raise AccessibilityError('capability_unavailable', 'Fullscreen changes require macOS Accessibility.',
+                                     stage='fullscreen.api')
         try:
             self.ax = ctypes.CDLL('/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices')
             self.cf = ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
@@ -49,7 +51,8 @@ class FullscreenSetter:
             self.true = ctypes.c_void_p.in_dll(self.cf, 'kCFBooleanTrue').value
             self.false = ctypes.c_void_p.in_dll(self.cf, 'kCFBooleanFalse').value
         except (OSError, AttributeError, ValueError) as error:
-            raise AccessibilityError('capability_unavailable', 'macOS fullscreen APIs are unavailable.') from error
+            raise AccessibilityError('capability_unavailable', 'macOS fullscreen APIs are unavailable.',
+                                     stage='fullscreen.api') from error
 
     @staticmethod
     def _check(status: int) -> None:
@@ -64,7 +67,8 @@ class FullscreenSetter:
         if type(desired) is not bool or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError('Fullscreen state must be boolean and timeout positive and finite.')
         if not self.ax.AXIsProcessTrusted():
-            raise AccessibilityError('access_denied', 'Accessibility permission is required for fullscreen changes.')
+            raise AccessibilityError('access_denied', 'Accessibility permission is required for fullscreen changes.',
+                                     stage='fullscreen.permission')
         deadline = self.clock() + timeout
         def remaining():
             value = deadline - self.clock()
@@ -73,6 +77,7 @@ class FullscreenSetter:
             return value
         owned = []
         windows = ctypes.c_void_p()
+        stage = 'fullscreen.application'
         try:
             app = self.ax.AXUIElementCreateApplication(identity.owner.pid)
             if not app:
@@ -86,11 +91,13 @@ class FullscreenSetter:
                 owned.append(key)
                 keys.append(key)
             self._check(self.ax.AXUIElementSetMessagingTimeout(app, remaining()))
+            stage = 'fullscreen.ax_windows'
             self._check(self.ax.AXUIElementCopyAttributeValue(app, keys[0], ctypes.byref(windows)))
             if not windows.value:
                 raise AccessibilityError('window_missing', 'The application has no accessible windows.')
             if self.cf.CFGetTypeID(windows) != self.cf.CFArrayGetTypeID():
                 raise AccessibilityError('invalid_response', 'Invalid Accessibility window list.')
+            stage = 'fullscreen.ax_window_lookup'
             for index in range(self.cf.CFArrayGetCount(windows)):
                 remaining()
                 element = self.cf.CFArrayGetValueAtIndex(windows, index)
@@ -104,9 +111,13 @@ class FullscreenSetter:
                 # process start identity immediately before the actual setter.
                 guard()
                 self._check(self.ax.AXUIElementSetMessagingTimeout(element, remaining()))
+                stage = 'fullscreen.ax_set_attribute'
                 self._check(self.ax.AXUIElementSetAttributeValue(element, keys[1], self.true if desired else self.false))
                 return
             raise AccessibilityError('window_missing', 'No accessible window matches the requested native window ID.')
+        except AccessibilityError as error:
+            error.stage = error.stage or stage
+            raise
         finally:
             if windows.value:
                 self.cf.CFRelease(windows)

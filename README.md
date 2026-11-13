@@ -103,6 +103,14 @@ state on or off. An accepted request stays provisional until verified, and a
 mismatch can receive one guarded repair attempt. Accessibility permission
 failures are reported without falling back to a fullscreen toggle.
 
+A temporary `window_missing` result can also receive that one repair attempt
+when two fresh observations find the original window/process identity with an
+unrestored state. Closed or replaced windows remain skipped, and protected or
+permission-denied windows cannot authorize edits. Unrestored fullscreen targets
+block their ordering group promptly instead of spending an ordering timeout.
+The private report and `--verbose` retain the failed operation stage, including
+failures that were subsequently recovered. Normal output stays concise.
+
 Restore also puts matched fullscreen Spaces in their saved relative order within
 each display, after restoring displays and states. Ordinary desktops keep their
 relative order; absolute Space slots are not restored. Reordering requires

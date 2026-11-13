@@ -64,6 +64,12 @@ def restore_lock(path: Path | None = None):
 
 
 @dataclass(frozen=True)
+class WindowFailure:
+    reason: str
+    stage: str
+
+
+@dataclass(frozen=True)
 class WindowOutcome:
     window_id: int
     status: str
@@ -72,6 +78,7 @@ class WindowOutcome:
     attempted_operations: tuple[str, ...] = ()
     source_window_id: int | None = None
     match_method: str | None = None
+    failures: tuple[WindowFailure, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -81,6 +88,7 @@ class RestoreIssue:
     window_id: int | None = None
     display_uuid: str | None = None
     source_window_id: int | None = None
+    stage: str | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +182,22 @@ class RestoreCoordinator:
     def _eligible(outcomes):
         return {o.window_id for o in outcomes if o.status in ('pending', 'restored', 'unchanged')}
 
+    @staticmethod
+    def _failures(result):
+        return ((WindowFailure(result.reason, result.failure_stage or 'window.restore'),)
+                if result.reason is not None else ())
+
+    def _blocked_order_issues(self, plan, outcomes):
+        eligible = self._eligible(outcomes)
+        issues = []
+        for order in plan.fullscreen_order:
+            blocked = next((identity.window_id for members in order.windows for identity in members
+                            if identity.window_id not in eligible), None)
+            if blocked is not None:
+                issues.append(RestoreIssue('ordering', 'fullscreen_order_blocked', blocked, order.display_uuid,
+                                           stage='ordering.prerequisites'))
+        return issues
+
     def _restore_views(self, plan, session, eligible, *, force=False, deadline=None):
         issues, last_focused = [], None
         for target in sorted(plan.visible, key=lambda t: t.identity == plan.focus):
@@ -184,14 +208,16 @@ class RestoreCoordinator:
                 last_focused = target.identity
             except (YabaiError, IdentityUnavailable) as error:
                 last_focused = None
-                issues.append(RestoreIssue('visibility', _reason(error), target.identity.window_id, target.display_uuid))
+                issues.append(RestoreIssue('visibility', _reason(error), target.identity.window_id, target.display_uuid,
+                                           stage=getattr(error, 'stage', None) or 'visibility.focus'))
                 if isinstance(error, YabaiError) and error.reason == YabaiFailure.SESSION_CHANGED:
                     return issues
         if plan.focus is not None and plan.focus.window_id in eligible and last_focused != plan.focus:
             try:
                 self._focus(plan.focus, session, None, force=force, deadline=deadline)
             except (YabaiError, IdentityUnavailable) as error:
-                issues.append(RestoreIssue('focus', _reason(error), plan.focus.window_id))
+                issues.append(RestoreIssue('focus', _reason(error), plan.focus.window_id,
+                                           stage=getattr(error, 'stage', None) or 'focus.request'))
         return issues
 
     def restore(self, saved: Snapshot, *, preserve: tuple[WindowRule, ...] = (), fallback: bool = True,
@@ -205,8 +231,11 @@ class RestoreCoordinator:
                                                                only_minimize=only_minimize))
 
     def _restore_order(self, plan: RestorePlan, session, outcomes: list[WindowOutcome]) -> list[RestoreIssue]:
-        issues = []
+        issues = self._blocked_order_issues(plan, outcomes)
+        eligible = self._eligible(outcomes)
         for order in plan.fullscreen_order:
+            if any(identity.window_id not in eligible for members in order.windows for identity in members):
+                continue  # A failed edit needs recovery, not an ordering timeout.
             window_id = order.windows[0][0].window_id
             try:
                 deadline = self.clock() + self.timeout
@@ -254,7 +283,7 @@ class RestoreCoordinator:
             except (YabaiError, IdentityUnavailable, SpaceOrderError) as error:
                 issues.append(RestoreIssue('ordering', _reason(error),
                                            error.window_id if isinstance(error, SpaceOrderError) else window_id,
-                                           order.display_uuid))
+                                           order.display_uuid, stage=getattr(error, 'stage', None) or 'ordering.restore'))
                 if isinstance(error, YabaiError) and error.reason in (
                         YabaiFailure.CAPABILITY_UNAVAILABLE, YabaiFailure.SESSION_CHANGED):
                     break
@@ -292,7 +321,8 @@ class RestoreCoordinator:
                         status = "restored" if result.status == TransitionStatus.VERIFIED else result.status.value
                         outcomes.append(WindowOutcome(decision.window_id, status, result.reason or decision.reason.value,
                                                       decision.monitor_fallback, result.attempted_operations,
-                                                      decision.source_window_id, decision.match_method))
+                                                      decision.source_window_id, decision.match_method,
+                                                      self._failures(result)))
                         session_changed = result.reason == YabaiFailure.SESSION_CHANGED
                     else:
                         expected_exclusion = (decision.reason == Reason.PROTECTED_WINDOW and
@@ -340,22 +370,28 @@ class RestoreCoordinator:
                         repaired.update(repair_ids)
                         repair_targets = [d.target for d in plan.windows if d.target is not None and
                                           d.window_id in repair_ids and any(
-                                              o.window_id == d.window_id and o.status in ('pending', 'failed')
+                                              o.window_id == d.window_id and (o.status in ('pending', 'failed') or
+                                              (o.status == 'skipped' and o.reason == YabaiFailure.WINDOW_MISSING))
                                               for o in outcomes)]
                         if repair_targets and final.session == before.session:
                             for target in repair_targets:
                                 result = self.execution.apply(target, before.session, final, deadline=deadline)
-                                outcomes = [replace(o, status=result.status.value, reason=result.reason or o.reason,
-                                                    attempted_operations=o.attempted_operations + result.attempted_operations)
+                                outcomes = [replace(o, status=result.status.value,
+                                                    reason=result.reason or Reason.RESTORE_SAVED.value,
+                                                    attempted_operations=o.attempted_operations + result.attempted_operations,
+                                                    failures=o.failures + self._failures(result))
                                             if o.window_id == target.identity.window_id else o for o in outcomes]
                                 if result.reason == YabaiFailure.SESSION_CHANGED:
                                     session_changed = True
                                     break
                             if not session_changed:
+                                issues = [i for i in issues if i.reason != 'fullscreen_order_blocked']
                                 if plan.fullscreen_order and not any(
                                         i.scope == 'ordering' and i.reason == YabaiFailure.CAPABILITY_UNAVAILABLE
                                         for i in issues):
                                     issues.extend(self._restore_order(plan, before.session, outcomes))
+                                else:
+                                    issues.extend(self._blocked_order_issues(plan, outcomes))
                                 eligible = self._eligible(outcomes)
                                 issues.extend(self._restore_views(plan, before.session, eligible, deadline=deadline))
                             stable = 0
@@ -372,8 +408,11 @@ class RestoreCoordinator:
                             continue
                         terminal_order_failure = any(i.scope == 'ordering' and
                                                      i.reason == YabaiFailure.CAPABILITY_UNAVAILABLE for i in issues)
+                        terminal_ids = {o.window_id for o in outcomes if o.status == 'unsupported' or
+                                        (o.status == 'skipped' and o.window_id in repaired)}
                         pending = [i for i in remaining if not (
-                            terminal_order_failure and i.reason == 'fullscreen_order_mismatch')]
+                            (terminal_order_failure and i.reason == 'fullscreen_order_mismatch') or
+                            i.window_id in terminal_ids)]
                         stable = stable + 1 if not pending else 0
                         if stable == 2:
                             break
@@ -383,7 +422,8 @@ class RestoreCoordinator:
                             remaining = [RestoreIssue("verification", "timeout")]
                     issues.extend(remaining)
                 except (YabaiError, IdentityUnavailable) as error:
-                    issues.append(RestoreIssue("verification", _reason(error)))
+                    issues.append(RestoreIssue("verification", _reason(error),
+                                               stage=getattr(error, 'stage', None) or 'desktop.observe'))
 
             failed_ids = {issue.window_id for issue in issues if issue.scope == "verification" and issue.window_id is not None}
             verified_outcomes = []

@@ -40,6 +40,7 @@ class OptimisticTransitions:
 
     def apply(self, target: WindowTarget, session, before: Snapshot, *, deadline: float | None = None) -> TransitionResult:
         attempts = []
+        stage = 'initial_state'
         try:
             def operation_deadline():
                 return min(self.clock() + self.timeout, deadline) if deadline is not None else self.clock() + self.timeout
@@ -54,14 +55,19 @@ class OptimisticTransitions:
                 raise YabaiError(YabaiFailure.UNSUPPORTED_WINDOW, 'This target does not manage Dock state.')
 
             def dock(desired):
+                nonlocal stage
+                stage = 'minimize.request' if desired else 'deminimize.request'
                 attempts.append('minimize' if desired else 'deminimize')
                 self.desktop.request_minimize(target.identity, session, desired,
                                                deadline=operation_deadline())
 
             def fullscreen(desired):
+                nonlocal stage
+                stage = 'focus.request'
                 attempts.append('focus')
                 self.desktop.request_focus(target.identity, session, deadline=operation_deadline())
                 attempts.append('enter_fullscreen' if desired else 'exit_fullscreen')
+                stage = 'fullscreen.request'
                 self.desktop.request_fullscreen(target.identity, session, desired,
                                                  deadline=operation_deadline())
 
@@ -77,17 +83,21 @@ class OptimisticTransitions:
             if moved:
                 # Fullscreen exit/deminimize must complete before a normal-Space
                 # move. This same fresh sample supplies its destination index.
+                stage = 'move.readiness'
                 observed = self._ready(target, session, deadline=operation_deadline())
                 attempts.append('move_to_display')
+                stage = 'move.request'
                 self.desktop.request_move_to_display(target.identity, session, target.display_uuid, observed,
                                                       deadline=operation_deadline())
                 current = replace(current, display_uuid=target.display_uuid)
             if target.fullscreen and not current.fullscreen:
                 if moved or deminimized:
+                    stage = 'fullscreen.readiness'
                     self._ready(target, session, display_uuid=target.display_uuid, deadline=operation_deadline())
                 fullscreen(True)
             if target.minimized and not current.minimized:
                 if moved or exited:
+                    stage = 'minimize.readiness'
                     self._ready(target, session, display_uuid=target.display_uuid, deadline=operation_deadline())
                 dock(True)
             return TransitionResult(target.identity, TransitionStatus.PENDING, None, tuple(attempts))
@@ -99,7 +109,7 @@ class OptimisticTransitions:
                 status = TransitionStatus.UNSUPPORTED
             else:
                 status = TransitionStatus.FAILED
-            return TransitionResult(target.identity, status, error.reason.value, tuple(attempts))
+            return TransitionResult(target.identity, status, error.reason.value, tuple(attempts), error.stage or stage)
         except IdentityUnavailable:
             return TransitionResult(target.identity, TransitionStatus.UNSUPPORTED,
-                                    YabaiFailure.IDENTITY_UNAVAILABLE.value, tuple(attempts))
+                                    YabaiFailure.IDENTITY_UNAVAILABLE.value, tuple(attempts), stage)
