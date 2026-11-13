@@ -26,7 +26,7 @@ class QueryBudgetTests(unittest.TestCase):
         import sys
         code = ('from click.testing import CliRunner; from spacekeeper.cli import main; import sys; '
                 'result=CliRunner().invoke(main,["--version"]); '
-                'assert result.exit_code==0; assert "yaml" not in sys.modules')
+                'assert result.exit_code==0; assert "yaml" not in sys.modules; assert "rich" not in sys.modules')
         subprocess.run([sys.executable, '-c', code], check=True, capture_output=True)
 
     def adapter(self, fake, clock):

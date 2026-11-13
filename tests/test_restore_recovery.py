@@ -44,6 +44,38 @@ class LookupGap(FakeYabai):
 
 
 class RestoreRecoveryTests(unittest.TestCase):
+    def test_persistent_lookup_finishes_with_styled_partial_result_and_exit_zero(self):
+        report, _, persisted = self.restore(LookupGap(window(focused=True), mode='persistent'),
+                                           observe(window(fullscreen=True, focused=True)))
+        self.assertFalse(persisted['complete'])
+        @click.command()
+        @click.pass_context
+        def command(ctx):
+            emit_report(ctx, report, name='synthetic', verbose=False)
+        result = CliRunner().invoke(command, color=True)
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIsNone(result.exception)
+        self.assertEqual(result.output, 'Workspace snapshot ' + click.style('synthetic', fg='blue', bold=True) +
+                         ' was partially restored ' + click.style('(1 missed)', dim=True) + '\n')
+
+    def test_persistent_lookup_failure_does_not_fail_other_windows_or_whole_restore(self):
+        class OneBrokenWindow(FakeYabai):
+            def set_fullscreen(self, identity, desired, *, guard, **options):
+                if identity.window_id == 1:
+                    guard()
+                    raise AccessibilityError('window_missing', 'Synthetic missing AX reference.',
+                                             stage='fullscreen.ax_window_lookup')
+                return super().set_fullscreen(identity, desired, guard=guard, **options)
+        fake = OneBrokenWindow(window(1, focused=True), window(2))
+        report, _, persisted = self.restore(fake, observe(window(1, fullscreen=True, focused=True),
+                                                         window(2, fullscreen=True)))
+        self.assertFalse(report.complete)
+        self.assertEqual(report.missed, 1)
+        self.assertEqual(next(w.status for w in report.windows if w.window_id == 2), 'restored')
+        self.assertTrue(fake.windows[2].fullscreen)
+        self.assertEqual(len(persisted['windows'][0]['failures']), 2)
+        self.assertFalse(report.hard_failure)
+
     def restore(self, fake, saved):
         clock = Clock()
         with tempfile.TemporaryDirectory() as temp:

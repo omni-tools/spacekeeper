@@ -117,13 +117,96 @@ class RestoreReport:
 
     @property
     def hard_failure(self) -> bool:
-        """Distinguish partial planning misses from operations/verification failure."""
-        return (any(w.status == 'failed' for w in self.windows) or
-                any(i.scope != 'planning' or (i.window_id is None and i.source_window_id is None)
-                    for i in self.issues) or (not self.complete and self.missed == 0))
+        """Separate partial window failures from loss of restore-wide guarantees."""
+        scoped_verification = {
+            'window_target_mismatch', 'missing_or_changed_owner', 'visible_window_mismatch',
+            'focused_window_mismatch', 'fullscreen_order_mismatch',
+            'fullscreen_order_target_changed', 'fullscreen_order_ambiguous',
+        }
+        scoped_operations = {reason.value for reason in YabaiFailure} - {
+            'session_changed', 'service_unavailable', 'not_found', 'invalid_response', 'output_limit',
+        }
+        def partial(issue):
+            if issue.reason == 'session_changed':
+                return False
+            if issue.scope == 'planning':
+                return issue.window_id is not None or issue.source_window_id is not None
+            if issue.window_id is None:
+                return False
+            if issue.scope == 'verification':
+                return issue.reason in scoped_verification
+            if issue.scope == 'ordering':
+                return issue.reason in scoped_operations | scoped_verification | {'fullscreen_order_blocked'}
+            if issue.scope in ('focus', 'visibility'):
+                return issue.reason in scoped_operations
+            return False
+        return (any(w.reason == 'session_changed' for w in self.windows) or
+                any(not partial(issue) for issue in self.issues) or
+                (not self.complete and self.missed == 0))
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class RestoreProgress:
+    """Processed targets, not claims of verified desktop state."""
+
+    phase: str = 'Observing'
+    windows_done: int = 0
+    windows_total: int | None = None
+    fullscreen_done: int = 0
+    fullscreen_total: int = 0
+    minimized_done: int = 0
+    minimized_total: int = 0
+    errors: int = 0
+
+
+class _Progress:
+    def __init__(self, callback):
+        self.callback = callback
+        self.windows, self.fullscreen, self.minimized = set(), set(), set()
+        self.planned = False
+
+    def bind(self, plan, before):
+        if self.callback is None:
+            return
+        current = {w.id: w for w in before.windows}
+        self.planned = True
+        for decision in plan.windows:
+            target = decision.target
+            if target is None:
+                continue
+            wid = decision.window_id
+            self.windows.add(wid)
+            window = current.get(wid)
+            if window is None:
+                continue
+            moved = window.display_uuid != target.display_uuid
+            if window.fullscreen != target.fullscreen or (moved and window.fullscreen):
+                self.fullscreen.add(wid)
+            if target.minimized is not None and (window.minimized != target.minimized or
+                                                 (moved and window.minimized)):
+                self.minimized.add(wid)
+
+    def emit(self, phase, outcomes=(), issues=()):
+        if self.callback is None:
+            return
+        done = {w.window_id for w in outcomes}
+        # Pending means accepted, not an error. Historical failures remain in
+        # reports, but disappear from this count after successful recovery.
+        healthy = tuple(replace(w, status='restored') if w.status == 'pending' else w for w in outcomes)
+        errors = RestoreReport(False, '', '', healthy, tuple(issues)).missed
+        errors += len({(i.scope, i.reason, i.stage) for i in issues
+                       if i.window_id is None and i.source_window_id is None})
+        progress = RestoreProgress(phase, len(done & self.windows), len(self.windows) if self.planned else None,
+                                   len(done & self.fullscreen), len(self.fullscreen),
+                                   len(done & self.minimized), len(self.minimized), errors)
+        try:
+            self.callback(progress)
+        except Exception:
+            # Terminal failures must not interrupt desktop recovery or reports.
+            self.callback = None
 
 
 class RestoreCoordinator:
@@ -131,11 +214,13 @@ class RestoreCoordinator:
                  timeout: float = 30, poll_interval: float = 0.2,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
                  on_backup: Callable[[Path], None] | None = None,
-                 on_plan: Callable[[RestorePlan], None] | None = None):
+                 on_plan: Callable[[RestorePlan], None] | None = None,
+                 on_progress: Callable[[RestoreProgress], None] | None = None):
         self.desktop, self.store, self.lock_path = desktop, store, lock_path
         self.timeout, self.interval, self.clock, self.sleep = timeout, poll_interval, clock, sleep
         self.on_backup = on_backup
         self.on_plan = on_plan
+        self.on_progress = on_progress
         self.execution = OptimisticTransitions(desktop, timeout=timeout, interval=poll_interval, clock=clock, sleep=sleep)
 
     def _observe(self, deadline: float) -> Snapshot:
@@ -293,12 +378,16 @@ class RestoreCoordinator:
         return self._restore(None, preset.plan)
 
     def _restore(self, saved: Snapshot | None, build_plan: Callable[[Snapshot], RestorePlan]) -> RestoreReport:
+        progress = _Progress(self.on_progress)
         with restore_lock(self.lock_path):
+            progress.emit('Observing')
             before = self._observe(self.clock() + self.timeout)
             backup = self.store.backup(before)  # Must succeed and read back before any mutation.
             if self.on_backup is not None:
                 self.on_backup(backup)
+            progress.emit('Planning')
             plan = build_plan(before)
+            progress.bind(plan, before)
             if self.on_plan is not None:
                 self.on_plan(plan)
             saved = before if saved is None else saved
@@ -310,6 +399,7 @@ class RestoreCoordinator:
             saved_ids = {window.id for window in saved.windows}
             protected_saved = {window.id for window in saved.windows if window.sticky or not window.root_window or
                                (window.role, window.subrole) != ('AXWindow', 'AXStandardWindow')}
+            progress.emit('Restoring', outcomes, issues)
             if plan.accepted:
                 for decision in plan.windows:
                     if session_changed:
@@ -331,8 +421,10 @@ class RestoreCoordinator:
                         outcomes.append(WindowOutcome(decision.window_id, status, decision.reason.value,
                                                       decision.monitor_fallback, source_window_id=decision.source_window_id,
                                                       match_method=decision.match_method))
+                    progress.emit('Restoring', outcomes, issues)
 
                 if not session_changed and plan.fullscreen_order:
+                    progress.emit('Ordering', outcomes, issues)
                     order_issues = self._restore_order(plan, before.session, outcomes)
                     issues.extend(order_issues)
                     session_changed = any(i.reason == YabaiFailure.SESSION_CHANGED for i in order_issues)
@@ -340,6 +432,7 @@ class RestoreCoordinator:
                 already_matches = (not any(d.status == DecisionStatus.PLANNED for d in plan.windows) and
                                    not self._verify(plan, before, before))
                 if not session_changed and not already_matches:
+                    progress.emit('Focusing', outcomes, issues)
                     view_issues = self._restore_views(plan, before.session, eligible)
                     issues.extend(view_issues)
                     session_changed = any(i.reason == YabaiFailure.SESSION_CHANGED for i in view_issues)
@@ -350,9 +443,11 @@ class RestoreCoordinator:
                     repaired = set()
                     mismatches = Counter()
                     focus_repaired = False
+                    progress.emit('Verifying', outcomes, issues)
                     while self.clock() < deadline:
                         final = self._observe(deadline)
                         remaining = self._verify(plan, before, final)
+                        progress.emit('Verifying', outcomes, issues + remaining)
                         invalid = {i.window_id for i in remaining}
                         for decision in plan.windows:
                             if decision.target is not None:
@@ -381,6 +476,7 @@ class RestoreCoordinator:
                                                     attempted_operations=o.attempted_operations + result.attempted_operations,
                                                     failures=o.failures + self._failures(result))
                                             if o.window_id == target.identity.window_id else o for o in outcomes]
+                                progress.emit('Verifying', outcomes, issues)
                                 if result.reason == YabaiFailure.SESSION_CHANGED:
                                     session_changed = True
                                     break
@@ -449,6 +545,7 @@ class RestoreCoordinator:
                 self.store.report(backup, report.to_dict())
             except Exception as error:
                 raise RestoreError(f"Cannot save the restore report. Pre-restore backup: {backup}") from error
+            progress.emit('Complete' if complete else 'Incomplete', outcomes, issues)
             return report
 
     @staticmethod

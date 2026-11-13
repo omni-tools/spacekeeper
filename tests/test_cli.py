@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -16,6 +17,29 @@ from tests.support import A, B, SESSION, observe, window
 
 
 class CliTests(unittest.TestCase):
+    def test_spinner_receives_progress_and_closes_before_final_output(self):
+        events = []
+        @contextmanager
+        def spinner(name):
+            self.assertEqual(name, 'alpha')
+            try:
+                yield events.append
+            finally:
+                events.append('closed')
+        SnapshotStore(self.state).save(observe(window(fullscreen=True, focused=True)), 'alpha')
+        from spacekeeper.cli import emit_report
+        def final(*args, **options):
+            self.assertEqual(events[-1], 'closed')
+            return emit_report(*args, **options)
+        with patch('spacekeeper.cli.restore_spinner', side_effect=spinner), \
+                patch('spacekeeper.cli.emit_report', side_effect=final):
+            result = self.invoke('restore', 'alpha', '--verbose')
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(events[-2].phase, 'Complete')
+        self.assertEqual(events[-2].fullscreen_total, 1)
+        self.assertIn('Pre-restore backup:', result.output)
+        self.assertIn('Workspace snapshot alpha was restored (0 missed)', result.output)
+
     def test_state_filters_restore_named_and_backup_snapshots(self):
         saved = observe(window(fullscreen=True), window(2, minimized=True))
         store = SnapshotStore(self.state)
@@ -206,7 +230,8 @@ class CliTests(unittest.TestCase):
         def coordinator(desktop, store, **options):
             return RestoreCoordinator(desktop, store, lock_path=self.root / 'lock/restore.lock', timeout=1,
                                       poll_interval=0.1, clock=self.clock, sleep=self.clock.sleep,
-                                      on_backup=options.get('on_backup'), on_plan=options.get('on_plan'))
+                                      on_backup=options.get('on_backup'), on_plan=options.get('on_plan'),
+                                      on_progress=options.get('on_progress'))
         factory = patch('spacekeeper.cli.RestoreCoordinator', side_effect=coordinator)
         factory.start()
         self.addCleanup(factory.stop)
@@ -257,14 +282,15 @@ class CliTests(unittest.TestCase):
         self.assertIn('INVALID', listed.output)
         self.assertEqual(self.device.commands, [])
 
-    def test_incomplete_restore_exits_one_with_backup_and_report(self):
+    def test_partial_restore_exits_zero_with_backup_and_report(self):
         SnapshotStore(self.state).save(observe(window(fullscreen=True)))
         self.device.effects['toggle'] = False
         result = self.invoke('restore', '--verbose')
-        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn('Pre-restore backup:', result.output)
         self.assertIn('Restore incomplete', result.output)
-        self.assertNotIn('was restored', result.output)
+        self.assertNotIn('Error:', result.output)
+        self.assertIn('Workspace snapshot default was partially restored (1 missed)', result.output)
         self.assertEqual(len(list((self.state / 'backups').glob('*.json'))), 1)
         self.assertEqual(len(list((self.state / 'reports').glob('*.json'))), 1)
 
@@ -292,17 +318,17 @@ class CliTests(unittest.TestCase):
         self.assertTrue(report['name_fallback'])
         self.assertEqual(next(w for w in report['windows'] if w['window_id'] == 9)['source_window_id'], 1)
 
-    def test_partial_name_fallback_reports_missing_sources_and_exits_one(self):
+    def test_partial_name_fallback_reports_missing_sources_and_exits_zero(self):
         SnapshotStore(self.state).save(observe(window(title='Missing title'),
                                               session=replace(SESSION, login_session_id=101)))
         self.device.windows[2] = window(2, title='Another window')
         result = self.invoke('restore')
-        self.assertEqual(result.exit_code, 1, result.output)
-        self.assertEqual(result.output, 'Workspace snapshot default was restored (1 missed)\n')
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(result.output, 'Workspace snapshot default was partially restored (1 missed)\n')
         self.assertEqual(self.device.commands, [])
         detailed = self.invoke('restore', '--verbose')
         self.assertIn('name_no_match (snapshot window 1)', detailed.output)
-        self.assertTrue(detailed.output.endswith('Workspace snapshot default was restored (1 missed)\n'))
+        self.assertTrue(detailed.output.endswith('Workspace snapshot default was partially restored (1 missed)\n'))
 
     def test_single_window_app_fallback_is_explicit_in_stdout_and_report(self):
         SnapshotStore(self.state).save(observe(window(title='Old title', minimized=True),

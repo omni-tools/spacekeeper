@@ -77,7 +77,7 @@ match. Reports distinguish `app_title` and `single_window_app` match methods.
 Matched windows use their current process identities and restore the saved
 fullscreen/monitor/minimized targets; unmatched current windows stay untouched, including
 fullscreen windows. Missing, ambiguous, and unsupported sources are reported and
-make the restore incomplete (exit 1). Reports identify source snapshot IDs
+make the restore partial (exit 0). Reports identify source snapshot IDs
 separately from current window IDs. Another user's snapshot is still rejected.
 If a disconnected monitor sends the final focused window onto another monitor,
 that window takes precedence over the other monitor's saved visible window.
@@ -110,6 +110,34 @@ permission-denied windows cannot authorize edits. Unrestored fullscreen targets
 block their ordering group promptly instead of spending an ordering timeout.
 The private report and `--verbose` retain the failed operation stage, including
 failures that were subsequently recovered. Normal output stays concise.
+
+Individual window failures, including persistent Accessibility lookup failures,
+leave other windows free to restore and verify. Unavailable fullscreen-Space
+ordering is also a partial result. These problems count as missed windows and
+remain in the private report, without raising a restore-wide verification error.
+The report still records `complete: false`. Lost session identity, unavailable
+global verification, and unexpected changes to preserved windows remain hard
+failures.
+
+Partial restores finish with `Workspace snapshot NAME was partially restored
+(X missed)` and exit 0. The name is bold blue and the missed count is dim.
+Detailed reasons stay behind `--verbose` and in the private report.
+
+In a terminal, a transient spinner shows restore phases and counters:
+
+```text
+⠋ Restoring beta · windows 12/27 · fullscreen 3/5 · minimized 7/16 · ⚠️ 2
+```
+
+Counters show processed/total matched targets, including unchanged windows.
+Fullscreen and minimized counters cover windows needing those state changes
+(including leaving fullscreen or restoring from the Dock); retries never count
+a window twice. Warnings count unresolved windows and global failures, and drop
+when recovery succeeds. Processing all targets is followed by verification;
+the completion message appears only after those checks. The name is bold blue,
+counters are dim, and nonzero warnings are yellow. Rich clears the spinner before
+the final result and keeps `--verbose` output readable above it. Redirecting
+either output stream, or setting `TERM=dumb`, disables animation.
 
 Restore also puts matched fullscreen Spaces in their saved relative order within
 each display, after restoring displays and states. Ordinary desktops keep their
@@ -215,8 +243,8 @@ observation must succeed before a backup or any window edits:
 spacekeeper restore alpha
 ```
 
-Exit codes: **0** for success, **1** for operational errors or incomplete
-restores, **2** for usage errors. A complete restore confirms supported targets,
+Exit codes: **0** for complete or recoverable partial restores, **1** for
+restore-wide operational errors, **2** for usage errors. A complete restore confirms supported targets,
 visible windows, and focus. Expected system-window exclusions are listed
 separately; closed, unsupported, blocked, or failed targets make the result
 incomplete. Structured JSON reports are stored privately; stdout is human-readable.

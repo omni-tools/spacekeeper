@@ -53,7 +53,7 @@ class SpaceOrderTests(unittest.TestCase):
         self.fake.failures['space_order'] = 'cannot send message to scripting-addition'
         report = self.coordinator.restore(self.saved)
         self.assertFalse(report.complete)
-        self.assertTrue(report.hard_failure)
+        self.assertFalse(report.hard_failure)
         self.assertTrue(any(i.scope == 'ordering' and i.reason == 'capability_unavailable' for i in report.issues))
         self.assertEqual(len(self.fake.commands), 1)
         self.assertTrue(Path(report.backup_path).is_file())

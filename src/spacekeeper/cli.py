@@ -12,6 +12,7 @@ from spacekeeper.matching import WindowRule
 from spacekeeper.planner import RestoreSelection
 from spacekeeper.restore import RestoreCoordinator, RestoreError
 from spacekeeper.storage import SnapshotStore, StorageError, validate_name
+from spacekeeper.terminal_progress import restore_spinner
 from spacekeeper.yabai import Yabai, YabaiError, YabaiFailure
 
 
@@ -153,20 +154,22 @@ def restore(ctx: click.Context, name: str | None, backup_id: str | None, preserv
                     click.echo(f'Preserve filters: {len(preserve)} rule(s).')
             if plan.accepted and selection.preserve_extras:
                 click.echo('Saved-state filters select windows; other current windows will stay untouched.')
-        coordinator = RestoreCoordinator(desktop(settings), store, timeout=settings.timeout,
-                                         on_backup=(lambda path: click.echo(f'Pre-restore backup: {path}')) if verbose else None,
-                                         on_plan=explain_plan if verbose else None)
-        report = coordinator.restore(saved, preserve=preserve, fallback=not no_fallback, minimize=not no_minimize,
-                                     ignore_position=ignore_position, fullscreen=not no_fullscreen,
-                                     only_fullscreen=only_fullscreen, only_minimize=only_minimize)
+        with restore_spinner(backup_id or name or 'default') as on_progress:
+            coordinator = RestoreCoordinator(desktop(settings), store, timeout=settings.timeout,
+                                             on_backup=(lambda path: click.echo(f'Pre-restore backup: {path}')) if verbose else None,
+                                             on_plan=explain_plan if verbose else None, on_progress=on_progress)
+            report = coordinator.restore(saved, preserve=preserve, fallback=not no_fallback, minimize=not no_minimize,
+                                         ignore_position=ignore_position, fullscreen=not no_fullscreen,
+                                         only_fullscreen=only_fullscreen, only_minimize=only_minimize)
         emit_report(ctx, report, name=backup_id or name or 'default', verbose=verbose)
 
 
 def emit_report(ctx, report, *, name=None, verbose=True):
     if verbose:
         emit_details(report)
+    hard_failure = report.hard_failure
     if name is not None:
-        if report.hard_failure:
+        if hard_failure:
             if any(i.reason == 'session_mismatch' for i in report.issues):
                 message = 'Snapshot belongs to a different boot/login session.'
             elif any(i.scope == 'verification' and i.reason == 'timeout' for i in report.issues):
@@ -174,9 +177,10 @@ def emit_report(ctx, report, *, name=None, verbose=True):
             else:
                 message = 'Restore could not be verified.'
             raise click.ClickException(message)
-        click.echo('Workspace snapshot ' + click.style(name, fg='blue', bold=True) + ' was restored ' +
+        result = ' was restored ' if report.complete else ' was partially restored '
+        click.echo('Workspace snapshot ' + click.style(name, fg='blue', bold=True) + result +
                    click.style(f'({report.missed} missed)', dim=True))
-    if not report.complete:
+    if hard_failure:
         ctx.exit(1)
 
 
